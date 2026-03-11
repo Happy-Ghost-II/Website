@@ -182,8 +182,9 @@ Promise.all([
   ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
   pickNewGhostTarget();
 
-  // Fit shadow cameras to model bounds
-  const maxDim = Math.max(monitorSize.x, monitorSize.y, monitorSize.z);
+  // Fit shadow cameras to full computer model bounds
+  const fullSize = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(fullSize.x, fullSize.y, fullSize.z);
   const shadowMargin = maxDim * 3;
 
   for (const light of [sunLight, topLight]) {
@@ -203,8 +204,8 @@ Promise.all([
   topLight.target.position.set(0, 0, 0);
   scene.add(topLight.target);
 
-  // Fit camera so model fills the screen vertically with a little padding
-  const modelHeight = monitorSize.y;
+  // Fit camera so full computer fills the screen vertically with a little padding
+  const modelHeight = fullSize.y;
   const padding = 1.1;
   const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
 
