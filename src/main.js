@@ -33,21 +33,9 @@ const camera = new THREE.PerspectiveCamera(
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
 scene.add(ambientLight);
 
-// Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
-// Blender -Y front → glTF +Z front; sun direction computed and flipped for position
 const sunLight = new THREE.DirectionalLight(0xffeedd, 1);
 sunLight.position.set(1, 0, 8);
 sunLight.castShadow = false;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
-sunLight.shadow.camera.near = 0.1;
-sunLight.shadow.camera.far = 50;
-sunLight.shadow.camera.left = -5;
-sunLight.shadow.camera.right = 5;
-sunLight.shadow.camera.top = 5;
-sunLight.shadow.camera.bottom = -5;
-sunLight.shadow.bias = -0.002;
-sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
 const topLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -57,17 +45,9 @@ topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
 topLight.shadow.camera.near = 0.1;
 topLight.shadow.camera.far = 50;
-topLight.shadow.camera.left = -1.5;
-topLight.shadow.camera.right = 1.5;
-topLight.shadow.camera.top = 1.5;
-topLight.shadow.camera.bottom = -1.5;
 topLight.shadow.bias = -0.002;
 topLight.shadow.normalBias = 0.05;
 scene.add(topLight);
-
-const fillLight = new THREE.DirectionalLight(0xddeeff, 0.0);
-fillLight.position.set(-2, 1, -2);
-scene.add(fillLight);
 
 // ── Model Loader ──────────────────────────────────────
 const loader = new GLTFLoader();
@@ -80,10 +60,7 @@ function loadModel(filename, addToScene = true) {
         if (addToScene) scene.add(gltf.scene);
         resolve(gltf);
       },
-      (progress) => {
-        const pct = (progress.loaded / progress.total * 100).toFixed(0);
-        console.log(`Loading ${filename}: ${pct}%`);
-      },
+      undefined,
       (error) => {
         console.error(`Failed to load ${filename}:`, error);
         reject(error);
@@ -92,7 +69,7 @@ function loadModel(filename, addToScene = true) {
   });
 }
 
-// ── Ghost wandering state ────────────────────────────
+// ── Ghost state ──────────────────────────────────────
 let ghost = null;
 let ghostBounds = null;
 let ghostTarget = new THREE.Vector3();
@@ -100,12 +77,12 @@ let ghostVelocity = new THREE.Vector3();
 const ghostSpeed = 0.15;
 const ghostBobSpeed = 1.5;
 const ghostBobAmount = 0.02;
-
 let ghostBaseY = 0;
+let ghostPauseTimer = 0;
+let ghostState = 'moving'; // 'moving' or 'paused'
 
 function pickNewGhostTarget() {
   if (!ghostBounds) return;
-  // Only wander on X and Z, keep Y fixed
   ghostTarget.set(
     THREE.MathUtils.lerp(ghostBounds.min.x, ghostBounds.max.x, Math.random()),
     ghostBaseY,
@@ -140,7 +117,7 @@ Promise.all([
   model.position.sub(center);
   model.updateMatrixWorld(true);
 
-  // Find the MonitorBounds object (a cube exported from Blender defining the ghost area)
+  // Find MonitorBounds
   let boundsObj = null;
   model.traverse((child) => {
     if (child.name === 'MonitorBounds') {
@@ -148,26 +125,35 @@ Promise.all([
     }
   });
 
-  // Set up ghost — remove extra cone (light/camera indicator from Blender)
+  // Set up ghost — remove any non-ghost geometry (cones, lights, cameras)
   ghost = ghostGltf.scene;
+  const toRemove = [];
+  ghost.traverse((child) => {
+    if (child.isMesh) {
+      // Remove any mesh that looks like a cone/indicator (transparent or unnamed)
+      if (child.material && (child.material.opacity < 1 || child.material.transparent)) {
+        toRemove.push(child);
+      }
+    }
+    // Remove any lights that came from Blender
+    if (child.isLight) {
+      toRemove.push(child);
+    }
+  });
+  toRemove.forEach((obj) => obj.parent?.remove(obj));
+
+  // Set up remaining ghost meshes
   ghost.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
     }
   });
-  // Log mesh names to find the cone
-  ghost.traverse((child) => {
-    if (child.isMesh || child.isLight) {
-      console.log('Ghost child:', child.name, child.type);
-    }
-  });
 
   if (boundsObj) {
-    // Get bounds from the MonitorBounds object (world-space, includes centering)
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
 
-    // Hide the bounds object and all its children
+    // Hide the bounds object
     boundsObj.traverse((child) => {
       child.visible = false;
       if (child.isMesh) {
@@ -179,13 +165,13 @@ Promise.all([
     // Scale ghost down to half size
     ghost.scale.multiplyScalar(0.5);
 
-    // Shrink bounds inward by the ghost's radius so it can't clip through walls
+    // Shrink bounds inward by the ghost's radius
     const ghostBox = new THREE.Box3().setFromObject(ghost);
     const ghostHalf = ghostBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
     ghostBounds.min.add(ghostHalf);
     ghostBounds.max.sub(ghostHalf);
 
-    // Set ghost Y to float just above the floor
+    // Start ghost near the floor
     ghostBaseY = ghostBounds.min.y;
     ghost.position.set(
       ghostBounds.getCenter(new THREE.Vector3()).x,
@@ -194,8 +180,6 @@ Promise.all([
     );
     scene.add(ghost);
     pickNewGhostTarget();
-  } else {
-    console.warn('MonitorBounds object not found in computer.glb — ghost disabled');
   }
 
   // Fit shadow cameras to full computer model bounds
@@ -214,20 +198,17 @@ Promise.all([
     light.shadow.camera.updateProjectionMatrix();
   }
 
-  // Point both shadow lights at the model center
   sunLight.target.position.set(0, 0, 0);
   scene.add(sunLight.target);
   topLight.target.position.set(0, 0, 0);
   scene.add(topLight.target);
 
-  // Fit camera so full computer fills the screen vertically with a little padding
+  // Fit camera
   const modelHeight = fullSize.y;
   const padding = 1.1;
   const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
-
   camera.position.set(0, 0, distance);
   camera.lookAt(0, 0, 0);
-
   fitCamera();
 });
 
@@ -237,7 +218,6 @@ function fitCamera() {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
-
 window.addEventListener('resize', fitCamera);
 
 // ── Render Loop ───────────────────────────────────────
@@ -248,25 +228,46 @@ function animate() {
   const delta = clock.getDelta();
   const elapsed = clock.getElapsedTime();
 
-  // Animate ghost wandering on X/Z, bobbing on Y
   if (ghost && ghostBounds) {
-    const dir = new THREE.Vector3().subVectors(ghostTarget, ghost.position);
-    dir.y = 0; // only move horizontally
-    const dist = dir.length();
-
-    if (dist < 0.02) {
-      pickNewGhostTarget();
+    if (ghostState === 'paused') {
+      ghostPauseTimer -= delta;
+      if (ghostPauseTimer <= 0) {
+        ghostState = 'moving';
+        pickNewGhostTarget();
+      }
     } else {
-      dir.normalize();
-      ghostVelocity.lerp(dir.multiplyScalar(ghostSpeed), delta * 2);
-      ghost.position.add(ghostVelocity.clone().multiplyScalar(delta));
+      const dir = new THREE.Vector3().subVectors(ghostTarget, ghost.position);
+      dir.y = 0;
+      const dist = dir.length();
 
-      // Clamp X/Z to bounds
-      ghost.position.x = THREE.MathUtils.clamp(ghost.position.x, ghostBounds.min.x, ghostBounds.max.x);
-      ghost.position.z = THREE.MathUtils.clamp(ghost.position.z, ghostBounds.min.z, ghostBounds.max.z);
+      if (dist < 0.02) {
+        // Arrived — pause for 1–4 seconds
+        ghostState = 'paused';
+        ghostPauseTimer = 1 + Math.random() * 3;
+        ghostVelocity.set(0, 0, 0);
+      } else {
+        dir.normalize();
+        ghostVelocity.lerp(dir.multiplyScalar(ghostSpeed), delta * 2);
+        ghost.position.add(ghostVelocity.clone().multiplyScalar(delta));
+
+        ghost.position.x = THREE.MathUtils.clamp(ghost.position.x, ghostBounds.min.x, ghostBounds.max.x);
+        ghost.position.z = THREE.MathUtils.clamp(ghost.position.z, ghostBounds.min.z, ghostBounds.max.z);
+
+        // Turn toward movement direction (Y-axis rotation only)
+        if (ghostVelocity.length() > 0.001) {
+          const targetAngle = Math.atan2(ghostVelocity.x, ghostVelocity.z);
+          // Smooth rotation
+          let currentAngle = ghost.rotation.y;
+          let angleDiff = targetAngle - currentAngle;
+          // Normalize to -PI..PI
+          while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+          while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+          ghost.rotation.y += angleDiff * delta * 4;
+        }
+      }
     }
 
-    // Bob up and down from the base Y position
+    // Bob up and down always
     ghost.position.y = ghostBaseY + Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount;
   }
 
@@ -275,5 +276,4 @@ function animate() {
 
 animate();
 
-// ── Exports for other modules ─────────────────────────
 export { scene, camera, renderer, loadModel };
