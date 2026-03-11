@@ -117,8 +117,9 @@ Promise.all([
 ]).then(([computerGltf, ghostGltf]) => {
   const model = computerGltf.scene;
 
-  // Enable shadows on all meshes
+  // Enable shadows on all meshes (skip MonitorBounds)
   model.traverse((child) => {
+    if (child.name === 'MonitorBounds') return;
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
@@ -154,8 +155,14 @@ Promise.all([
     // Get bounds from the MonitorBounds object (world-space, includes centering)
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
 
-    // Hide the bounds object — it's only used for positioning
-    boundsObj.visible = false;
+    // Hide the bounds object and all its children
+    boundsObj.traverse((child) => {
+      child.visible = false;
+      if (child.isMesh) {
+        child.castShadow = false;
+        child.receiveShadow = false;
+      }
+    });
 
     ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
     scene.add(ghost);
