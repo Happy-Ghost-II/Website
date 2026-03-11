@@ -72,15 +72,19 @@ function loadModel(filename) {
   });
 }
 
-// ── Placeholder geometry (remove once real models arrive) ──
-const placeholderGeo = new THREE.BoxGeometry(1, 1, 1);
-const placeholderMat = new THREE.MeshStandardMaterial({
-  color: 0x444444,
-  metalness: 0.3,
-  roughness: 0.7,
+// ── Load Model ───────────────────────────────────────
+loadModel('computer.glb').then((gltf) => {
+  const model = gltf.scene;
+  // Center the model
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.sub(center);
+  // Fit camera to model size
+  const size = box.getSize(new THREE.Vector3()).length();
+  camera.position.set(0, 0, size * 1.5);
+  controls.target.set(0, 0, 0);
+  controls.update();
 });
-const placeholder = new THREE.Mesh(placeholderGeo, placeholderMat);
-scene.add(placeholder);
 
 // ── Resize ────────────────────────────────────────────
 function onResize() {
@@ -95,12 +99,7 @@ const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = clock.getDelta();
-  const elapsed = clock.getElapsedTime();
-
-  // Slow rotation on placeholder (remove later)
-  placeholder.rotation.y = elapsed * 0.3;
-  placeholder.rotation.x = elapsed * 0.15;
+  clock.getDelta();
 
   controls.update();
   renderer.render(scene, camera);
