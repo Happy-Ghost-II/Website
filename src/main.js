@@ -125,6 +125,8 @@ Promise.all([
       child.receiveShadow = true;
       if (child.material) {
         child.material.side = THREE.DoubleSide;
+        child.material.transparent = true;
+        child.material.opacity = 0.3;
       }
     }
   });
