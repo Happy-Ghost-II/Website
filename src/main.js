@@ -167,16 +167,19 @@ Promise.all([
       }
     });
 
+    // Scale ghost down to half size
+    ghost.scale.multiplyScalar(0.5);
+
     // Shrink bounds inward by the ghost's radius so it can't clip through walls
     const ghostBox = new THREE.Box3().setFromObject(ghost);
     const ghostHalf = ghostBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
     ghostBounds.min.add(ghostHalf);
     ghostBounds.max.sub(ghostHalf);
 
-    // Start ghost near the bottom of the bounds
+    // Start ghost floating just above the floor of the bounds
     ghost.position.set(
       ghostBounds.getCenter(new THREE.Vector3()).x,
-      ghostBounds.max.y,
+      ghostBounds.min.y,
       ghostBounds.getCenter(new THREE.Vector3()).z,
     );
     scene.add(ghost);
@@ -254,11 +257,8 @@ function animate() {
       // Gentle bobbing
       ghost.position.y += Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount * delta;
 
-      // Face movement direction slightly
-      if (ghostVelocity.length() > 0.01) {
-        const lookTarget = ghost.position.clone().add(ghostVelocity);
-        ghost.lookAt(lookTarget);
-      }
+      // Always face the camera
+      ghost.rotation.set(0, 0, 0);
     }
   }
 
