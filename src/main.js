@@ -133,16 +133,11 @@ Promise.all([
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
 
-  // Find the monitor interior bounds by looking for the sky-textured mesh
-  // Log mesh names so we can identify the monitor interior
+  // Find the monitor cube mesh to get its interior bounds
   let monitorMesh = null;
   model.traverse((child) => {
-    if (child.isMesh) {
-      console.log('Mesh:', child.name, 'pos:', child.position);
-      // The sky/cloud mesh is likely the monitor interior
-      if (child.material && child.material.map) {
-        monitorMesh = child;
-      }
+    if (child.isMesh && child.name === 'Cube') {
+      monitorMesh = child;
     }
   });
 
@@ -155,30 +150,35 @@ Promise.all([
     }
   });
 
+  // Get monitor interior bounds from the Cube mesh
+  const monitorBox = new THREE.Box3().setFromObject(monitorMesh);
+  // Apply the same centering offset
+  monitorBox.min.sub(center);
+  monitorBox.max.sub(center);
+
+  const monitorInteriorSize = monitorBox.getSize(new THREE.Vector3());
+
   // Scale ghost to fit inside the monitor
   const ghostBox = new THREE.Box3().setFromObject(ghost);
   const ghostSize = ghostBox.getSize(new THREE.Vector3());
-  const monitorSize = box.getSize(new THREE.Vector3());
-  const ghostScale = (monitorSize.y * 0.15) / ghostSize.y;
+  const ghostScale = (monitorInteriorSize.y * 0.2) / ghostSize.y;
   ghost.scale.setScalar(ghostScale);
 
-  // Define the monitor interior bounds for wandering
-  // Shrink inward from the full model bounds, focusing on the upper portion (monitor)
-  const margin = 0.03;
+  // Shrink bounds inward so ghost stays inside with padding
+  const padding3d = monitorInteriorSize.clone().multiplyScalar(0.1);
   ghostBounds = new THREE.Box3(
     new THREE.Vector3(
-      box.min.x + monitorSize.x * 0.15,
-      center.y + monitorSize.y * 0.05,
-      box.min.z + monitorSize.z * 0.15,
+      monitorBox.min.x + padding3d.x,
+      monitorBox.min.y + padding3d.y,
+      monitorBox.min.z + padding3d.z,
     ),
     new THREE.Vector3(
-      box.max.x - monitorSize.x * 0.15,
-      box.max.y - monitorSize.y * 0.1,
-      box.max.z - margin,
+      monitorBox.max.x - padding3d.x,
+      monitorBox.max.y - padding3d.y,
+      monitorBox.max.z - padding3d.z,
     ),
   );
 
-  // Offset ghost position by the same centering offset as the computer
   ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
   pickNewGhostTarget();
 
