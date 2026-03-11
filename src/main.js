@@ -40,7 +40,7 @@ sunLight.position.set(1, 0, 8);
 scene.add(sunLight);
 
 const topLight = new THREE.DirectionalLight(0xffffff, 0.6);
-topLight.position.set(0, 0.5, 2);
+topLight.position.set(-1.5, 3, 4);
 topLight.castShadow = true;
 topLight.shadow.mapSize.width = 2048;
 topLight.shadow.mapSize.height = 2048;
