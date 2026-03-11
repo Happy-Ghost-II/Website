@@ -133,11 +133,11 @@ Promise.all([
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
 
-  // Find the monitor object (may be a Group or Mesh named "Cube")
-  let monitorObj = null;
+  // Find the MonitorBounds object (a cube exported from Blender defining the ghost area)
+  let boundsObj = null;
   model.traverse((child) => {
-    if (child.name === 'Cube') {
-      monitorObj = child;
+    if (child.name === 'MonitorBounds') {
+      boundsObj = child;
     }
   });
 
@@ -150,38 +150,19 @@ Promise.all([
     }
   });
 
-  // Get monitor interior bounds (world-space, already includes centering offset)
-  const monitorBox = new THREE.Box3().setFromObject(monitorObj);
-  const monitorInteriorSize = monitorBox.getSize(new THREE.Vector3());
-  console.log('Monitor obj:', monitorObj?.name, monitorObj?.type);
-  console.log('Monitor bounds:', monitorBox);
-  console.log('Full computer bounds:', box);
-  console.log('Full computer size:', box.getSize(new THREE.Vector3()));
+  if (boundsObj) {
+    // Get bounds from the MonitorBounds object (world-space, includes centering)
+    ghostBounds = new THREE.Box3().setFromObject(boundsObj);
 
-  // Scale ghost to fit inside the monitor
-  const ghostBox = new THREE.Box3().setFromObject(ghost);
-  const ghostSize = ghostBox.getSize(new THREE.Vector3());
-  const ghostScale = (monitorInteriorSize.y * 0.2) / ghostSize.y;
-  ghost.scale.setScalar(ghostScale);
+    // Hide the bounds object — it's only used for positioning
+    boundsObj.visible = false;
 
-  // Shrink bounds inward so ghost stays inside with padding
-  const padding3d = monitorInteriorSize.clone().multiplyScalar(0.1);
-  ghostBounds = new THREE.Box3(
-    new THREE.Vector3(
-      monitorBox.min.x + padding3d.x,
-      monitorBox.min.y + padding3d.y,
-      monitorBox.min.z + padding3d.z,
-    ),
-    new THREE.Vector3(
-      monitorBox.max.x - padding3d.x,
-      monitorBox.max.y - padding3d.y,
-      monitorBox.max.z - padding3d.z,
-    ),
-  );
-
-  ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
-  scene.add(ghost);
-  pickNewGhostTarget();
+    ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
+    scene.add(ghost);
+    pickNewGhostTarget();
+  } else {
+    console.warn('MonitorBounds object not found in computer.glb — ghost disabled');
+  }
 
   // Fit shadow cameras to full computer model bounds
   const fullSize = box.getSize(new THREE.Vector3());
