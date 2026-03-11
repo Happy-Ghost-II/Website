@@ -51,7 +51,7 @@ sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
 const topLight = new THREE.DirectionalLight(0xffffff, 1.5);
-topLight.position.set(-5, 5, 5);
+topLight.position.set(-2, 3, 8);
 topLight.castShadow = true;
 topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
@@ -115,7 +115,7 @@ loadModel('computer.glb').then((gltf) => {
   // Fit shadow cameras to model bounds
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  const shadowMargin = maxDim;
+  const shadowMargin = maxDim * 3;
 
   for (const light of [sunLight, topLight]) {
     const dist = light.position.length();
@@ -123,8 +123,8 @@ loadModel('computer.glb').then((gltf) => {
     light.shadow.camera.right = shadowMargin;
     light.shadow.camera.top = shadowMargin;
     light.shadow.camera.bottom = -shadowMargin;
-    light.shadow.camera.near = Math.max(0.1, dist - shadowMargin * 2);
-    light.shadow.camera.far = dist + shadowMargin * 2;
+    light.shadow.camera.near = Math.max(0.1, dist - shadowMargin);
+    light.shadow.camera.far = dist + shadowMargin;
     light.shadow.camera.updateProjectionMatrix();
   }
 
@@ -135,21 +135,6 @@ loadModel('computer.glb').then((gltf) => {
   topLight.target.position.set(0, 0, 0);
   scene.add(topLight.target);
 
-  console.log('Model size:', size);
-  console.log('Shadow margin:', shadowMargin);
-
-  // Debug: log all meshes and their materials
-  model.traverse((child) => {
-    if (child.isMesh) {
-      console.log('Mesh:', child.name, 'Material type:', child.material.type, 'castShadow:', child.castShadow, 'receiveShadow:', child.receiveShadow);
-    }
-  });
-
-  // Debug: visualize shadow camera frustums
-  const sunHelper = new THREE.CameraHelper(sunLight.shadow.camera);
-  scene.add(sunHelper);
-  const topHelper = new THREE.CameraHelper(topLight.shadow.camera);
-  scene.add(topHelper);
 
   // Fit camera so model fills the screen vertically with a little padding
   const modelHeight = size.y;
