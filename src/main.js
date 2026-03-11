@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ── Renderer ──────────────────────────────────────────
 const canvas = document.getElementById('scene');
@@ -19,27 +18,24 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
 
-// ── Camera ────────────────────────────────────────────
+// ── Camera (low FOV for flat/telephoto look) ─────────
+const fov = 10;
 const camera = new THREE.PerspectiveCamera(
-  45,
+  fov,
   window.innerWidth / window.innerHeight,
   0.1,
-  100
+  1000
 );
-camera.position.set(0, 0, 5);
-
-// ── Controls (dev only — remove or lock for production) ──
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
 
 // ── Lighting ──────────────────────────────────────────
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
 scene.add(ambientLight);
 
-const keyLight = new THREE.DirectionalLight(0xffeedd, 1.0);
-keyLight.position.set(2, 3, 4);
-scene.add(keyLight);
+// Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
+// Blender -Y front → glTF +Z front; sun direction computed and flipped for position
+const sunLight = new THREE.DirectionalLight(0xffeedd, 1.0);
+sunLight.position.set(1.7, 0.3, 10);
+scene.add(sunLight);
 
 const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
 fillLight.position.set(-2, 1, -2);
@@ -48,10 +44,6 @@ scene.add(fillLight);
 // ── Model Loader ──────────────────────────────────────
 const loader = new GLTFLoader();
 
-/**
- * Load a GLB/GLTF model from public/models/
- * Usage: loadModel('panel-frame.glb').then(model => { ... })
- */
 function loadModel(filename) {
   return new Promise((resolve, reject) => {
     loader.load(
@@ -75,33 +67,37 @@ function loadModel(filename) {
 // ── Load Model ───────────────────────────────────────
 loadModel('computer.glb').then((gltf) => {
   const model = gltf.scene;
+
   // Center the model
   const box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
-  // Fit camera to model size
-  const size = box.getSize(new THREE.Vector3()).length();
-  camera.position.set(0, 0, size * 1.5);
-  controls.target.set(0, 0, 0);
-  controls.update();
+
+  // Fit camera so model fills the screen vertically with a little padding
+  const size = box.getSize(new THREE.Vector3());
+  const modelHeight = size.y;
+  const padding = 1.1; // 10% breathing room top/bottom
+  const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
+
+  // Camera faces +Z → front of computer (Blender -Y → glTF +Z)
+  camera.position.set(0, 0, distance);
+  camera.lookAt(0, 0, 0);
+
+  fitCamera();
 });
 
 // ── Resize ────────────────────────────────────────────
-function onResize() {
+function fitCamera() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
-window.addEventListener('resize', onResize);
+
+window.addEventListener('resize', fitCamera);
 
 // ── Render Loop ───────────────────────────────────────
-const clock = new THREE.Clock();
-
 function animate() {
   requestAnimationFrame(animate);
-  clock.getDelta();
-
-  controls.update();
   renderer.render(scene, camera);
 }
 
