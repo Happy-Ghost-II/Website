@@ -109,8 +109,24 @@ loadModel('computer.glb').then((gltf) => {
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
 
-  // Fit camera so model fills the screen vertically with a little padding
+  // Fit shadow cameras to model bounds
   const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const shadowMargin = maxDim * 0.6;
+
+  for (const light of [sunLight, topLight]) {
+    light.shadow.camera.left = -shadowMargin;
+    light.shadow.camera.right = shadowMargin;
+    light.shadow.camera.top = shadowMargin;
+    light.shadow.camera.bottom = -shadowMargin;
+    light.shadow.camera.updateProjectionMatrix();
+  }
+
+  // Point both shadow lights at the model center
+  sunLight.target.position.set(0, 0, 0);
+  topLight.target.position.set(0, 0, 0);
+
+  // Fit camera so model fills the screen vertically with a little padding
   const modelHeight = size.y;
   const padding = 1.1; // 10% breathing room top/bottom
   const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
