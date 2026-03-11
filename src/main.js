@@ -30,7 +30,7 @@ const camera = new THREE.PerspectiveCamera(
 );
 
 // ── Lighting ──────────────────────────────────────────
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
 // Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
@@ -56,7 +56,7 @@ topLight.castShadow = true;
 topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
 topLight.shadow.camera.near = 0.1;
-topLight.shadow.camera.far = 20;
+topLight.shadow.camera.far = 50;
 topLight.shadow.camera.left = -1.5;
 topLight.shadow.camera.right = 1.5;
 topLight.shadow.camera.top = 1.5;
@@ -115,13 +115,14 @@ loadModel('computer.glb').then((gltf) => {
   // Fit shadow cameras to model bounds
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  const shadowMargin = maxDim * 0.6;
+  const shadowMargin = maxDim;
 
   for (const light of [sunLight, topLight]) {
     light.shadow.camera.left = -shadowMargin;
     light.shadow.camera.right = shadowMargin;
     light.shadow.camera.top = shadowMargin;
     light.shadow.camera.bottom = -shadowMargin;
+    light.shadow.camera.far = shadowMargin * 5;
     light.shadow.camera.updateProjectionMatrix();
   }
 
