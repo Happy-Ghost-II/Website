@@ -155,11 +155,6 @@ Promise.all([
     // Get bounds from the MonitorBounds object (world-space, includes centering)
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
 
-    const gc = ghostBounds.getCenter(new THREE.Vector3());
-    console.log(`MonitorBounds: min(${ghostBounds.min.x.toFixed(3)}, ${ghostBounds.min.y.toFixed(3)}, ${ghostBounds.min.z.toFixed(3)}) max(${ghostBounds.max.x.toFixed(3)}, ${ghostBounds.max.y.toFixed(3)}, ${ghostBounds.max.z.toFixed(3)})`);
-    console.log(`MonitorBounds center: (${gc.x.toFixed(3)}, ${gc.y.toFixed(3)}, ${gc.z.toFixed(3)})`);
-    console.log(`Computer center offset: (${center.x.toFixed(3)}, ${center.y.toFixed(3)}, ${center.z.toFixed(3)})`);
-
     // Hide the bounds object and all its children
     boundsObj.traverse((child) => {
       child.visible = false;
@@ -169,19 +164,18 @@ Promise.all([
       }
     });
 
-    // Debug: show bounds as visible wireframe
-    const bs = ghostBounds.getSize(new THREE.Vector3());
-    const bc = ghostBounds.getCenter(new THREE.Vector3());
-    const debugGeo = new THREE.BoxGeometry(bs.x, bs.y, bs.z);
-    const debugMat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
-    const debugBox = new THREE.Mesh(debugGeo, debugMat);
-    debugBox.position.copy(bc);
-    scene.add(debugBox);
+    // Shrink bounds inward by the ghost's radius so it can't clip through walls
+    const ghostBox = new THREE.Box3().setFromObject(ghost);
+    const ghostHalf = ghostBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    ghostBounds.min.add(ghostHalf);
+    ghostBounds.max.sub(ghostHalf);
 
-    console.log(`Bounds size: (${bs.x.toFixed(3)}, ${bs.y.toFixed(3)}, ${bs.z.toFixed(3)})`);
-    console.log(`Bounds center: (${bc.x.toFixed(3)}, ${bc.y.toFixed(3)}, ${bc.z.toFixed(3)})`);
-
-    ghost.position.copy(bc);
+    // Start ghost near the bottom of the bounds
+    ghost.position.set(
+      ghostBounds.getCenter(new THREE.Vector3()).x,
+      ghostBounds.min.y,
+      ghostBounds.getCenter(new THREE.Vector3()).z,
+    );
     scene.add(ghost);
     pickNewGhostTarget();
   } else {
