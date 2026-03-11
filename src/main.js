@@ -135,6 +135,7 @@ Promise.all([
   const box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
+  model.updateMatrixWorld(true);
 
   // Find the MonitorBounds object (a cube exported from Blender defining the ghost area)
   let boundsObj = null;
