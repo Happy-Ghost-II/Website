@@ -72,12 +72,12 @@ scene.add(fillLight);
 // ── Model Loader ──────────────────────────────────────
 const loader = new GLTFLoader();
 
-function loadModel(filename) {
+function loadModel(filename, addToScene = true) {
   return new Promise((resolve, reject) => {
     loader.load(
       `/models/${filename}`,
       (gltf) => {
-        scene.add(gltf.scene);
+        if (addToScene) scene.add(gltf.scene);
         resolve(gltf);
       },
       (progress) => {
@@ -113,7 +113,7 @@ function pickNewGhostTarget() {
 // ── Load Models ──────────────────────────────────────
 Promise.all([
   loadModel('computer.glb'),
-  loadModel('webghost.glb'),
+  loadModel('webghost.glb', false),
 ]).then(([computerGltf, ghostGltf]) => {
   const model = computerGltf.scene;
 
@@ -180,6 +180,7 @@ Promise.all([
   );
 
   ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
+  scene.add(ghost);
   pickNewGhostTarget();
 
   // Fit shadow cameras to full computer model bounds
