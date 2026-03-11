@@ -155,6 +155,12 @@ Promise.all([
     // Get bounds from the MonitorBounds object (world-space, includes centering)
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
 
+    console.log('MonitorBounds found:', boundsObj.name, boundsObj.type);
+    console.log('Ghost bounds min:', ghostBounds.min);
+    console.log('Ghost bounds max:', ghostBounds.max);
+    console.log('Ghost bounds center:', ghostBounds.getCenter(new THREE.Vector3()));
+    console.log('Computer center offset:', center);
+
     // Hide the bounds object and all its children
     boundsObj.traverse((child) => {
       child.visible = false;
