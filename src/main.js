@@ -34,7 +34,7 @@ scene.add(ambientLight);
 // Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
 // Blender -Y front → glTF +Z front; sun direction computed and flipped for position
 const sunLight = new THREE.DirectionalLight(0xffeedd, 1.8);
-sunLight.position.set(1.7, 0.3, 10);
+sunLight.position.set(2, 5, 8);
 scene.add(sunLight);
 
 const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
