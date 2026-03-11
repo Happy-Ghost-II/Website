@@ -92,9 +92,30 @@ function loadModel(filename) {
   });
 }
 
-// ── Load Model ───────────────────────────────────────
-loadModel('computer.glb').then((gltf) => {
-  const model = gltf.scene;
+// ── Ghost wandering state ────────────────────────────
+let ghost = null;
+let ghostBounds = null;
+let ghostTarget = new THREE.Vector3();
+let ghostVelocity = new THREE.Vector3();
+const ghostSpeed = 0.15;
+const ghostBobSpeed = 1.5;
+const ghostBobAmount = 0.02;
+
+function pickNewGhostTarget() {
+  if (!ghostBounds) return;
+  ghostTarget.set(
+    THREE.MathUtils.lerp(ghostBounds.min.x, ghostBounds.max.x, Math.random()),
+    THREE.MathUtils.lerp(ghostBounds.min.y, ghostBounds.max.y, Math.random()),
+    THREE.MathUtils.lerp(ghostBounds.min.z, ghostBounds.max.z, Math.random()),
+  );
+}
+
+// ── Load Models ──────────────────────────────────────
+Promise.all([
+  loadModel('computer.glb'),
+  loadModel('webghost.glb'),
+]).then(([computerGltf, ghostGltf]) => {
+  const model = computerGltf.scene;
 
   // Enable shadows on all meshes
   model.traverse((child) => {
@@ -107,14 +128,62 @@ loadModel('computer.glb').then((gltf) => {
     }
   });
 
-  // Center the model
+  // Center the computer model
   const box = new THREE.Box3().setFromObject(model);
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
 
+  // Find the monitor interior bounds by looking for the sky-textured mesh
+  // Log mesh names so we can identify the monitor interior
+  let monitorMesh = null;
+  model.traverse((child) => {
+    if (child.isMesh) {
+      console.log('Mesh:', child.name, 'pos:', child.position);
+      // The sky/cloud mesh is likely the monitor interior
+      if (child.material && child.material.map) {
+        monitorMesh = child;
+      }
+    }
+  });
+
+  // Set up ghost
+  ghost = ghostGltf.scene;
+  ghost.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+
+  // Scale ghost to fit inside the monitor
+  const ghostBox = new THREE.Box3().setFromObject(ghost);
+  const ghostSize = ghostBox.getSize(new THREE.Vector3());
+  const monitorSize = box.getSize(new THREE.Vector3());
+  const ghostScale = (monitorSize.y * 0.15) / ghostSize.y;
+  ghost.scale.setScalar(ghostScale);
+
+  // Define the monitor interior bounds for wandering
+  // Shrink inward from the full model bounds, focusing on the upper portion (monitor)
+  const margin = 0.03;
+  ghostBounds = new THREE.Box3(
+    new THREE.Vector3(
+      box.min.x + monitorSize.x * 0.15,
+      center.y + monitorSize.y * 0.05,
+      box.min.z + monitorSize.z * 0.15,
+    ),
+    new THREE.Vector3(
+      box.max.x - monitorSize.x * 0.15,
+      box.max.y - monitorSize.y * 0.1,
+      box.max.z - margin,
+    ),
+  );
+
+  // Offset ghost position by the same centering offset as the computer
+  ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
+  pickNewGhostTarget();
+
   // Fit shadow cameras to model bounds
-  const size = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+  const maxDim = Math.max(monitorSize.x, monitorSize.y, monitorSize.z);
   const shadowMargin = maxDim * 3;
 
   for (const light of [sunLight, topLight]) {
@@ -129,19 +198,16 @@ loadModel('computer.glb').then((gltf) => {
   }
 
   // Point both shadow lights at the model center
-  // Targets must be added to the scene for Three.js to use them
   sunLight.target.position.set(0, 0, 0);
   scene.add(sunLight.target);
   topLight.target.position.set(0, 0, 0);
   scene.add(topLight.target);
 
-
   // Fit camera so model fills the screen vertically with a little padding
-  const modelHeight = size.y;
-  const padding = 1.1; // 10% breathing room top/bottom
+  const modelHeight = monitorSize.y;
+  const padding = 1.1;
   const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
 
-  // Camera faces +Z → front of computer (Blender -Y → glTF +Z)
   camera.position.set(0, 0, distance);
   camera.lookAt(0, 0, 0);
 
@@ -158,8 +224,40 @@ function fitCamera() {
 window.addEventListener('resize', fitCamera);
 
 // ── Render Loop ───────────────────────────────────────
+const clock = new THREE.Clock();
+
 function animate() {
   requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  const elapsed = clock.getElapsedTime();
+
+  // Animate ghost wandering
+  if (ghost && ghostBounds) {
+    const dir = new THREE.Vector3().subVectors(ghostTarget, ghost.position);
+    const dist = dir.length();
+
+    if (dist < 0.02) {
+      pickNewGhostTarget();
+    } else {
+      dir.normalize();
+      // Smooth acceleration toward target
+      ghostVelocity.lerp(dir.multiplyScalar(ghostSpeed), delta * 2);
+      ghost.position.add(ghostVelocity.clone().multiplyScalar(delta));
+
+      // Clamp to bounds
+      ghost.position.clamp(ghostBounds.min, ghostBounds.max);
+
+      // Gentle bobbing
+      ghost.position.y += Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount * delta;
+
+      // Face movement direction slightly
+      if (ghostVelocity.length() > 0.01) {
+        const lookTarget = ghost.position.clone().add(ghostVelocity);
+        ghost.lookAt(lookTarget);
+      }
+    }
+  }
+
   renderer.render(scene, camera);
 }
 
