@@ -133,11 +133,11 @@ Promise.all([
   const center = box.getCenter(new THREE.Vector3());
   model.position.sub(center);
 
-  // Find the monitor cube mesh to get its interior bounds
-  let monitorMesh = null;
+  // Find the monitor object (may be a Group or Mesh named "Cube")
+  let monitorObj = null;
   model.traverse((child) => {
-    if (child.isMesh && child.name === 'Cube') {
-      monitorMesh = child;
+    if (child.name === 'Cube') {
+      monitorObj = child;
     }
   });
 
@@ -150,13 +150,13 @@ Promise.all([
     }
   });
 
-  // Get monitor interior bounds from the Cube mesh
-  const monitorBox = new THREE.Box3().setFromObject(monitorMesh);
-  // Apply the same centering offset
-  monitorBox.min.sub(center);
-  monitorBox.max.sub(center);
-
+  // Get monitor interior bounds (world-space, already includes centering offset)
+  const monitorBox = new THREE.Box3().setFromObject(monitorObj);
   const monitorInteriorSize = monitorBox.getSize(new THREE.Vector3());
+  console.log('Monitor obj:', monitorObj?.name, monitorObj?.type);
+  console.log('Monitor bounds:', monitorBox);
+  console.log('Full computer bounds:', box);
+  console.log('Full computer size:', box.getSize(new THREE.Vector3()));
 
   // Scale ghost to fit inside the monitor
   const ghostBox = new THREE.Box3().setFromObject(ghost);
