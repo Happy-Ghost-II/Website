@@ -51,7 +51,7 @@ sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
 const topLight = new THREE.DirectionalLight(0xffffff, 1.5);
-topLight.position.set(0, 4, 4);
+topLight.position.set(0, 8, 1);
 topLight.castShadow = true;
 topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
@@ -127,8 +127,14 @@ loadModel('computer.glb').then((gltf) => {
   }
 
   // Point both shadow lights at the model center
+  // Targets must be added to the scene for Three.js to use them
   sunLight.target.position.set(0, 0, 0);
+  scene.add(sunLight.target);
   topLight.target.position.set(0, 0, 0);
+  scene.add(topLight.target);
+
+  console.log('Model size:', size);
+  console.log('Shadow margin:', shadowMargin);
 
   // Fit camera so model fills the screen vertically with a little padding
   const modelHeight = size.y;
