@@ -169,7 +169,19 @@ Promise.all([
       }
     });
 
-    ghost.position.copy(ghostBounds.getCenter(new THREE.Vector3()));
+    // Log ghost size for debugging
+    const ghostBox = new THREE.Box3().setFromObject(ghost);
+    const gs = ghostBox.getSize(new THREE.Vector3());
+    const bs = ghostBounds.getSize(new THREE.Vector3());
+    console.log(`Ghost size: (${gs.x.toFixed(3)}, ${gs.y.toFixed(3)}, ${gs.z.toFixed(3)})`);
+    console.log(`Bounds size: (${bs.x.toFixed(3)}, ${bs.y.toFixed(3)}, ${bs.z.toFixed(3)})`);
+
+    // Start ghost at center X/Z, near the bottom of the bounds
+    ghost.position.set(
+      ghostBounds.getCenter(new THREE.Vector3()).x,
+      ghostBounds.min.y + gs.y / 2,
+      ghostBounds.getCenter(new THREE.Vector3()).z,
+    );
     scene.add(ghost);
     pickNewGhostTarget();
   } else {
