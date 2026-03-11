@@ -101,11 +101,14 @@ const ghostSpeed = 0.15;
 const ghostBobSpeed = 1.5;
 const ghostBobAmount = 0.02;
 
+let ghostBaseY = 0;
+
 function pickNewGhostTarget() {
   if (!ghostBounds) return;
+  // Only wander on X and Z, keep Y fixed
   ghostTarget.set(
     THREE.MathUtils.lerp(ghostBounds.min.x, ghostBounds.max.x, Math.random()),
-    THREE.MathUtils.lerp(ghostBounds.min.y, ghostBounds.max.y, Math.random()),
+    ghostBaseY,
     THREE.MathUtils.lerp(ghostBounds.min.z, ghostBounds.max.z, Math.random()),
   );
 }
@@ -145,12 +148,18 @@ Promise.all([
     }
   });
 
-  // Set up ghost
+  // Set up ghost — remove extra cone (light/camera indicator from Blender)
   ghost = ghostGltf.scene;
   ghost.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
+    }
+  });
+  // Log mesh names to find the cone
+  ghost.traverse((child) => {
+    if (child.isMesh || child.isLight) {
+      console.log('Ghost child:', child.name, child.type);
     }
   });
 
@@ -176,10 +185,11 @@ Promise.all([
     ghostBounds.min.add(ghostHalf);
     ghostBounds.max.sub(ghostHalf);
 
-    // Start ghost floating just above the floor of the bounds
+    // Set ghost Y to float just above the floor
+    ghostBaseY = ghostBounds.min.y;
     ghost.position.set(
       ghostBounds.getCenter(new THREE.Vector3()).x,
-      ghostBounds.min.y,
+      ghostBaseY,
       ghostBounds.getCenter(new THREE.Vector3()).z,
     );
     scene.add(ghost);
@@ -238,28 +248,26 @@ function animate() {
   const delta = clock.getDelta();
   const elapsed = clock.getElapsedTime();
 
-  // Animate ghost wandering
+  // Animate ghost wandering on X/Z, bobbing on Y
   if (ghost && ghostBounds) {
     const dir = new THREE.Vector3().subVectors(ghostTarget, ghost.position);
+    dir.y = 0; // only move horizontally
     const dist = dir.length();
 
     if (dist < 0.02) {
       pickNewGhostTarget();
     } else {
       dir.normalize();
-      // Smooth acceleration toward target
       ghostVelocity.lerp(dir.multiplyScalar(ghostSpeed), delta * 2);
       ghost.position.add(ghostVelocity.clone().multiplyScalar(delta));
 
-      // Clamp to bounds
-      ghost.position.clamp(ghostBounds.min, ghostBounds.max);
-
-      // Gentle bobbing
-      ghost.position.y += Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount * delta;
-
-      // Always face the camera
-      ghost.rotation.set(0, 0, 0);
+      // Clamp X/Z to bounds
+      ghost.position.x = THREE.MathUtils.clamp(ghost.position.x, ghostBounds.min.x, ghostBounds.max.x);
+      ghost.position.z = THREE.MathUtils.clamp(ghost.position.z, ghostBounds.min.z, ghostBounds.max.z);
     }
+
+    // Bob up and down from the base Y position
+    ghost.position.y = ghostBaseY + Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount;
   }
 
   renderer.render(scene, camera);
