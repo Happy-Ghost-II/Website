@@ -50,6 +50,10 @@ sunLight.shadow.bias = -0.002;
 sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
+const topLight = new THREE.DirectionalLight(0xffffff, 0.6);
+topLight.position.set(0, 4, 2);
+scene.add(topLight);
+
 const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
 fillLight.position.set(-2, 1, -2);
 scene.add(fillLight);
