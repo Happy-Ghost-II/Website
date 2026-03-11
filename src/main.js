@@ -125,19 +125,21 @@ Promise.all([
     }
   });
 
-  // Set up ghost — remove any non-ghost geometry (cones, lights, cameras)
+  // Set up ghost — remove everything except the ghost body mesh
   ghost = ghostGltf.scene;
   const toRemove = [];
   ghost.traverse((child) => {
-    if (child.isMesh) {
-      // Remove any mesh that looks like a cone/indicator (transparent or unnamed)
-      if (child.material && (child.material.opacity < 1 || child.material.transparent)) {
-        toRemove.push(child);
-      }
-    }
-    // Remove any lights that came from Blender
-    if (child.isLight) {
+    console.log('Ghost node:', child.name, child.type, child.isMesh ? 'MESH' : '');
+    // Remove lights and cameras from Blender
+    if (child.isLight || child.isCamera) {
       toRemove.push(child);
+    }
+    // Remove cone meshes — keep only what looks like the ghost body
+    if (child.isMesh && child.geometry) {
+      const geo = child.geometry;
+      // Cones typically have far fewer vertices than the ghost body
+      const vertCount = geo.attributes.position?.count || 0;
+      console.log(`  Mesh "${child.name}" verts:${vertCount}`);
     }
   });
   toRemove.forEach((obj) => obj.parent?.remove(obj));
