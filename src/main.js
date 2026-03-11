@@ -118,11 +118,13 @@ loadModel('computer.glb').then((gltf) => {
   const shadowMargin = maxDim;
 
   for (const light of [sunLight, topLight]) {
+    const dist = light.position.length();
     light.shadow.camera.left = -shadowMargin;
     light.shadow.camera.right = shadowMargin;
     light.shadow.camera.top = shadowMargin;
     light.shadow.camera.bottom = -shadowMargin;
-    light.shadow.camera.far = shadowMargin * 5;
+    light.shadow.camera.near = Math.max(0.1, dist - shadowMargin * 2);
+    light.shadow.camera.far = dist + shadowMargin * 2;
     light.shadow.camera.updateProjectionMatrix();
   }
 
