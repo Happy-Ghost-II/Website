@@ -173,7 +173,7 @@ Promise.all([
     // Start ghost near the bottom of the bounds
     ghost.position.set(
       ghostBounds.getCenter(new THREE.Vector3()).x,
-      ghostBounds.min.y,
+      ghostBounds.max.y,
       ghostBounds.getCenter(new THREE.Vector3()).z,
     );
     scene.add(ghost);
