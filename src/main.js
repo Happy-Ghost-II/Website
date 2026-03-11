@@ -101,6 +101,9 @@ loadModel('computer.glb').then((gltf) => {
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
+      if (child.material) {
+        child.material.side = THREE.DoubleSide;
+      }
     }
   });
 
