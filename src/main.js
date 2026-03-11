@@ -65,7 +65,7 @@ topLight.shadow.bias = -0.002;
 topLight.shadow.normalBias = 0.05;
 scene.add(topLight);
 
-const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
+const fillLight = new THREE.DirectionalLight(0xddeeff, 0.0);
 fillLight.position.set(-2, 1, -2);
 scene.add(fillLight);
 
