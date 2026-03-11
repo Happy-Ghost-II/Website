@@ -50,8 +50,8 @@ sunLight.shadow.bias = -0.002;
 sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
-const topLight = new THREE.DirectionalLight(0xffffff, 0.6);
-topLight.position.set(0, 2, 4);
+const topLight = new THREE.DirectionalLight(0xffffff, 1.5);
+topLight.position.set(0, 2, 8);
 topLight.castShadow = true;
 topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
