@@ -19,7 +19,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a1a);
 
 // ── Camera (low FOV for flat/telephoto look) ─────────
-const fov = 10;
+const fov = 39.6; // ~50mm focal length
 const camera = new THREE.PerspectiveCamera(
   fov,
   window.innerWidth / window.innerHeight,
@@ -33,7 +33,7 @@ scene.add(ambientLight);
 
 // Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
 // Blender -Y front → glTF +Z front; sun direction computed and flipped for position
-const sunLight = new THREE.DirectionalLight(0xffeedd, 1.0);
+const sunLight = new THREE.DirectionalLight(0xffeedd, 1.8);
 sunLight.position.set(1.7, 0.3, 10);
 scene.add(sunLight);
 
