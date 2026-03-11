@@ -30,12 +30,12 @@ const camera = new THREE.PerspectiveCamera(
 );
 
 // ── Lighting ──────────────────────────────────────────
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
 scene.add(ambientLight);
 
 // Sun — Blender rotation x=100°, y=-100°, z=0° converted to Three.js
 // Blender -Y front → glTF +Z front; sun direction computed and flipped for position
-const sunLight = new THREE.DirectionalLight(0xffeedd, 3);
+const sunLight = new THREE.DirectionalLight(0xffeedd, 1.5);
 sunLight.position.set(1, 0, 8);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.width = 2048;
@@ -51,7 +51,7 @@ sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
 const topLight = new THREE.DirectionalLight(0xffffff, 0.6);
-topLight.position.set(-1.5, 3, 4);
+topLight.position.set(0, 2, 4);
 topLight.castShadow = true;
 topLight.shadow.mapSize.width = 4096;
 topLight.shadow.mapSize.height = 4096;
