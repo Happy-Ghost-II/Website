@@ -46,6 +46,8 @@ sunLight.shadow.camera.left = -5;
 sunLight.shadow.camera.right = 5;
 sunLight.shadow.camera.top = 5;
 sunLight.shadow.camera.bottom = -5;
+sunLight.shadow.bias = -0.002;
+sunLight.shadow.normalBias = 0.05;
 scene.add(sunLight);
 
 const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
