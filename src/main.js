@@ -169,19 +169,19 @@ Promise.all([
       }
     });
 
-    // Log ghost size for debugging
-    const ghostBox = new THREE.Box3().setFromObject(ghost);
-    const gs = ghostBox.getSize(new THREE.Vector3());
+    // Debug: show bounds as visible wireframe
     const bs = ghostBounds.getSize(new THREE.Vector3());
-    console.log(`Ghost size: (${gs.x.toFixed(3)}, ${gs.y.toFixed(3)}, ${gs.z.toFixed(3)})`);
-    console.log(`Bounds size: (${bs.x.toFixed(3)}, ${bs.y.toFixed(3)}, ${bs.z.toFixed(3)})`);
+    const bc = ghostBounds.getCenter(new THREE.Vector3());
+    const debugGeo = new THREE.BoxGeometry(bs.x, bs.y, bs.z);
+    const debugMat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
+    const debugBox = new THREE.Mesh(debugGeo, debugMat);
+    debugBox.position.copy(bc);
+    scene.add(debugBox);
 
-    // Start ghost at center X/Z, near the bottom of the bounds
-    ghost.position.set(
-      ghostBounds.getCenter(new THREE.Vector3()).x,
-      ghostBounds.min.y + gs.y / 2,
-      ghostBounds.getCenter(new THREE.Vector3()).z,
-    );
+    console.log(`Bounds size: (${bs.x.toFixed(3)}, ${bs.y.toFixed(3)}, ${bs.z.toFixed(3)})`);
+    console.log(`Bounds center: (${bc.x.toFixed(3)}, ${bc.y.toFixed(3)}, ${bc.z.toFixed(3)})`);
+
+    ghost.position.copy(bc);
     scene.add(ghost);
     pickNewGhostTarget();
   } else {
