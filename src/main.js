@@ -136,6 +136,19 @@ loadModel('computer.glb').then((gltf) => {
   console.log('Model size:', size);
   console.log('Shadow margin:', shadowMargin);
 
+  // Debug: log all meshes and their materials
+  model.traverse((child) => {
+    if (child.isMesh) {
+      console.log('Mesh:', child.name, 'Material type:', child.material.type, 'castShadow:', child.castShadow, 'receiveShadow:', child.receiveShadow);
+    }
+  });
+
+  // Debug: visualize shadow camera frustums
+  const sunHelper = new THREE.CameraHelper(sunLight.shadow.camera);
+  scene.add(sunHelper);
+  const topHelper = new THREE.CameraHelper(topLight.shadow.camera);
+  scene.add(topHelper);
+
   // Fit camera so model fills the screen vertically with a little padding
   const modelHeight = size.y;
   const padding = 1.1; // 10% breathing room top/bottom
