@@ -13,10 +13,12 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ── Scene ─────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a1a);
+scene.background = new THREE.Color(0x000000);
 
 // ── Camera (low FOV for flat/telephoto look) ─────────
 const fov = 39.6; // ~50mm focal length
@@ -35,6 +37,15 @@ scene.add(ambientLight);
 // Blender -Y front → glTF +Z front; sun direction computed and flipped for position
 const sunLight = new THREE.DirectionalLight(0xffeedd, 1.8);
 sunLight.position.set(2, 5, 8);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 0.1;
+sunLight.shadow.camera.far = 50;
+sunLight.shadow.camera.left = -5;
+sunLight.shadow.camera.right = 5;
+sunLight.shadow.camera.top = 5;
+sunLight.shadow.camera.bottom = -5;
 scene.add(sunLight);
 
 const fillLight = new THREE.DirectionalLight(0xddeeff, 0.3);
@@ -67,6 +78,14 @@ function loadModel(filename) {
 // ── Load Model ───────────────────────────────────────
 loadModel('computer.glb').then((gltf) => {
   const model = gltf.scene;
+
+  // Enable shadows on all meshes
+  model.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
 
   // Center the model
   const box = new THREE.Box3().setFromObject(model);
