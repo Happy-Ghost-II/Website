@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { GhostMind } from './ghost/ghost-mind.js';
 
 // ── Renderer ──────────────────────────────────────────
 const canvas = document.getElementById('scene');
@@ -20,34 +21,36 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-// ── Camera (low FOV for flat/telephoto look) ─────────
-const fov = 39.6; // ~50mm focal length
-const camera = new THREE.PerspectiveCamera(
-  fov,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000
-);
+// ── Camera (orthographic with slight downward angle) ──
+const cameraPitch = THREE.MathUtils.degToRad(20); // slight downward tilt
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+let cameraFitSize = 1; // will be set after model loads
 
 // ── Lighting ──────────────────────────────────────────
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+// Ambient — neutral, well-lit, like a normal room
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
-const sunLight = new THREE.DirectionalLight(0xffeedd, 1);
-sunLight.position.set(1, 0, 8);
-sunLight.castShadow = false;
-scene.add(sunLight);
+// Monitor glow — subtle warmth from the screen
+const monitorGlow = new THREE.PointLight(0xddccbb, 1.2, 4, 1.5);
+scene.add(monitorGlow); // position set after model loads
 
-const topLight = new THREE.DirectionalLight(0xffffff, 1);
-topLight.position.set(0, 3, 8);
-topLight.castShadow = true;
-topLight.shadow.mapSize.width = 4096;
-topLight.shadow.mapSize.height = 4096;
-topLight.shadow.camera.near = 0.1;
-topLight.shadow.camera.far = 50;
-topLight.shadow.bias = -0.002;
-topLight.shadow.normalBias = 0.05;
-scene.add(topLight);
+// Fill light from above-right — neutral, soft
+const edgeLight = new THREE.DirectionalLight(0xffffff, 0.3);
+edgeLight.position.set(2, 3, 1);
+scene.add(edgeLight);
+
+// Soft top-down shadow caster — keeps shadows grounded
+const shadowLight = new THREE.DirectionalLight(0x111118, 0.4);
+shadowLight.position.set(0, 4, 3);
+shadowLight.castShadow = true;
+shadowLight.shadow.mapSize.width = 2048;
+shadowLight.shadow.mapSize.height = 2048;
+shadowLight.shadow.camera.near = 0.1;
+shadowLight.shadow.camera.far = 50;
+shadowLight.shadow.bias = -0.002;
+shadowLight.shadow.normalBias = 0.05;
+scene.add(shadowLight);
 
 // ── Model Loader ──────────────────────────────────────
 const loader = new GLTFLoader();
@@ -74,19 +77,40 @@ let ghost = null;
 let ghostBounds = null;
 let ghostTarget = new THREE.Vector3();
 let ghostVelocity = new THREE.Vector3();
-const ghostSpeed = 0.15;
-const ghostBobSpeed = 1.5;
-const ghostBobAmount = 0.02;
+// Ghost mind — cognitive architecture
+const mind = new GhostMind();
+const thoughtsContent = document.getElementById('thoughts-content');
+
+let currentThoughtEl = null;
+
+mind.thoughtGenerator.addListener({
+  onToken(text) {
+    if (!currentThoughtEl) {
+      currentThoughtEl = document.createElement('p');
+      currentThoughtEl.className = 'thought-entry';
+      thoughtsContent.insertBefore(currentThoughtEl, document.getElementById('thoughts-cursor'));
+    }
+    currentThoughtEl.textContent = text;
+    thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
+  },
+  onComplete() {
+    currentThoughtEl = null;
+  },
+});
 let ghostBaseY = 0;
+let ghostBaseZ = 0;
 let ghostPauseTimer = 0;
 let ghostState = 'moving'; // 'moving' or 'paused'
+// Pre-allocated temp vectors to avoid per-frame allocation
+const _dir = new THREE.Vector3();
+const _scaled = new THREE.Vector3();
 
 function pickNewGhostTarget() {
   if (!ghostBounds) return;
   ghostTarget.set(
     THREE.MathUtils.lerp(ghostBounds.min.x, ghostBounds.max.x, Math.random()),
     ghostBaseY,
-    THREE.MathUtils.lerp(ghostBounds.min.z, ghostBounds.max.z, Math.random()),
+    ghostBaseZ,
   );
 }
 
@@ -105,8 +129,8 @@ Promise.all([
       child.receiveShadow = true;
       if (child.material) {
         child.material.side = THREE.DoubleSide;
-        child.material.transparent = true;
-        child.material.opacity = 0.3;
+        // child.material.transparent = true;
+        // child.material.opacity = 0.3;
       }
     }
   });
@@ -129,17 +153,8 @@ Promise.all([
   ghost = ghostGltf.scene;
   const toRemove = [];
   ghost.traverse((child) => {
-    console.log('Ghost node:', child.name, child.type, child.isMesh ? 'MESH' : '');
-    // Remove lights and cameras from Blender
-    if (child.isLight || child.isCamera) {
+    if (child.isLight || child.isCamera || child.name === 'Cone') {
       toRemove.push(child);
-    }
-    // Remove cone meshes — keep only what looks like the ghost body
-    if (child.isMesh && child.geometry) {
-      const geo = child.geometry;
-      // Cones typically have far fewer vertices than the ghost body
-      const vertCount = geo.attributes.position?.count || 0;
-      console.log(`  Mesh "${child.name}" verts:${vertCount}`);
     }
   });
   toRemove.forEach((obj) => obj.parent?.remove(obj));
@@ -154,7 +169,6 @@ Promise.all([
 
   if (boundsObj) {
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
-
     // Hide the bounds object
     boundsObj.traverse((child) => {
       child.visible = false;
@@ -167,60 +181,101 @@ Promise.all([
     // Scale ghost down to half size
     ghost.scale.multiplyScalar(0.5);
 
-    // Shrink bounds inward by the ghost's radius
+    // Measure how far the ghost's mesh extends below/above its origin
     const ghostBox = new THREE.Box3().setFromObject(ghost);
-    const ghostHalf = ghostBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-    ghostBounds.min.add(ghostHalf);
-    ghostBounds.max.sub(ghostHalf);
+    const ghostSize = ghostBox.getSize(new THREE.Vector3());
+    const meshBottomBelowOrigin = ghost.position.y - ghostBox.min.y;
+    const meshTopAboveOrigin = ghostBox.max.y - ghost.position.y;
 
-    // Start ghost near the floor
-    ghostBaseY = ghostBounds.min.y;
-    ghost.position.set(
-      ghostBounds.getCenter(new THREE.Vector3()).x,
-      ghostBaseY,
-      ghostBounds.getCenter(new THREE.Vector3()).z,
-    );
+    // Shrink X bounds so ghost doesn't poke out the sides
+    ghostBounds.min.x += ghostSize.x * 0.5;
+    ghostBounds.max.x -= ghostSize.x * 0.5;
+
+    // Set floor/ceiling so ghost mesh stays fully inside
+    const boundsCenter = ghostBounds.getCenter(new THREE.Vector3());
+    ghostBaseY = ghostBounds.min.y + meshBottomBelowOrigin + mind.behaviorParams.bobAmount;
+    ghostBaseZ = boundsCenter.z;
+    ghost.position.set(boundsCenter.x, ghostBaseY, ghostBaseZ);
     scene.add(ghost);
     pickNewGhostTarget();
   }
 
-  // Fit shadow cameras to full computer model bounds
+  // Position monitor glow at the screen face (front of bounds, centered)
+  if (boundsObj) {
+    const bc = ghostBounds.getCenter(new THREE.Vector3());
+    monitorGlow.position.set(bc.x, bc.y, ghostBounds.max.z + 0.15);
+  }
+
+  // Fit shadow camera to model bounds
   const fullSize = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(fullSize.x, fullSize.y, fullSize.z);
   const shadowMargin = maxDim * 3;
 
-  for (const light of [sunLight, topLight]) {
-    const dist = light.position.length();
-    light.shadow.camera.left = -shadowMargin;
-    light.shadow.camera.right = shadowMargin;
-    light.shadow.camera.top = shadowMargin;
-    light.shadow.camera.bottom = -shadowMargin;
-    light.shadow.camera.near = Math.max(0.1, dist - shadowMargin);
-    light.shadow.camera.far = dist + shadowMargin;
-    light.shadow.camera.updateProjectionMatrix();
-  }
+  const dist = shadowLight.position.length();
+  shadowLight.shadow.camera.left = -shadowMargin;
+  shadowLight.shadow.camera.right = shadowMargin;
+  shadowLight.shadow.camera.top = shadowMargin;
+  shadowLight.shadow.camera.bottom = -shadowMargin;
+  shadowLight.shadow.camera.near = Math.max(0.1, dist - shadowMargin);
+  shadowLight.shadow.camera.far = dist + shadowMargin;
+  shadowLight.shadow.camera.updateProjectionMatrix();
 
-  sunLight.target.position.set(0, 0, 0);
-  scene.add(sunLight.target);
-  topLight.target.position.set(0, 0, 0);
-  scene.add(topLight.target);
+  shadowLight.target.position.set(0, 0, 0);
+  scene.add(shadowLight.target);
+  edgeLight.target.position.set(0, 0, 0);
+  scene.add(edgeLight.target);
 
-  // Fit camera
-  const modelHeight = fullSize.y;
+  // Fit camera — size the ortho frustum to the model
   const padding = 1.1;
-  const distance = (modelHeight * padding / 2) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
-  camera.position.set(0, 0, distance);
+  cameraFitSize = Math.max(fullSize.x, fullSize.y) * padding * 0.5;
+
+  // Position camera: looking slightly downward
+  const cameraDistance = 10;
+  camera.position.set(
+    0,
+    Math.sin(cameraPitch) * cameraDistance,
+    Math.cos(cameraPitch) * cameraDistance,
+  );
   camera.lookAt(0, 0, 0);
   fitCamera();
+
+  // Start the ghost's brain
+  const loadingEl = document.createElement('p');
+  loadingEl.className = 'thought-entry';
+  loadingEl.textContent = 'loading...';
+  thoughtsContent.insertBefore(loadingEl, document.getElementById('thoughts-cursor'));
+  mind.init(({ loaded, total }) => {
+    loadingEl.textContent = `loading brain... ${Math.round((loaded / total) * 100)}%`;
+  }).then(() => {
+    loadingEl.remove();
+    mind.start();
+  });
 });
 
 // ── Resize ────────────────────────────────────────────
 function fitCamera() {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const aspect = window.innerWidth / window.innerHeight;
+  if (aspect >= 1) {
+    // Landscape / square: fit height, expand width
+    camera.top = cameraFitSize;
+    camera.bottom = -cameraFitSize;
+    camera.left = -cameraFitSize * aspect;
+    camera.right = cameraFitSize * aspect;
+  } else {
+    // Portrait (mobile): fit width, expand height
+    camera.left = -cameraFitSize;
+    camera.right = cameraFitSize;
+    camera.top = cameraFitSize / aspect;
+    camera.bottom = -cameraFitSize / aspect;
+  }
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
-window.addEventListener('resize', fitCamera);
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(fitCamera, 100);
+});
 
 // ── Render Loop ───────────────────────────────────────
 const clock = new THREE.Clock();
@@ -238,30 +293,29 @@ function animate() {
         pickNewGhostTarget();
       }
     } else {
-      const dir = new THREE.Vector3().subVectors(ghostTarget, ghost.position);
-      dir.y = 0;
-      const dist = dir.length();
+      _dir.subVectors(ghostTarget, ghost.position);
+      _dir.y = 0; // only move in X (left/right along the floor)
+      _dir.z = 0;
+      const dist = _dir.length();
 
       if (dist < 0.02) {
         // Arrived — pause for 1–4 seconds
         ghostState = 'paused';
-        ghostPauseTimer = 1 + Math.random() * 3;
+        ghostPauseTimer = mind.behaviorParams.pauseDuration * (0.5 + Math.random());
         ghostVelocity.set(0, 0, 0);
       } else {
-        dir.normalize();
-        ghostVelocity.lerp(dir.multiplyScalar(ghostSpeed), delta * 2);
-        ghost.position.add(ghostVelocity.clone().multiplyScalar(delta));
+        _dir.normalize();
+        ghostVelocity.lerp(_dir.multiplyScalar(mind.behaviorParams.moveSpeed), delta * 2);
+        _scaled.copy(ghostVelocity).multiplyScalar(delta);
+        ghost.position.add(_scaled);
 
         ghost.position.x = THREE.MathUtils.clamp(ghost.position.x, ghostBounds.min.x, ghostBounds.max.x);
-        ghost.position.z = THREE.MathUtils.clamp(ghost.position.z, ghostBounds.min.z, ghostBounds.max.z);
 
-        // Turn toward movement direction (Y-axis rotation only)
+        // Turn to face movement direction (rotate around Y axis)
         if (ghostVelocity.length() > 0.001) {
           const targetAngle = Math.atan2(ghostVelocity.x, ghostVelocity.z);
-          // Smooth rotation
           let currentAngle = ghost.rotation.y;
           let angleDiff = targetAngle - currentAngle;
-          // Normalize to -PI..PI
           while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
           while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
           ghost.rotation.y += angleDiff * delta * 4;
@@ -269,8 +323,8 @@ function animate() {
       }
     }
 
-    // Bob up and down always
-    ghost.position.y = ghostBaseY + Math.sin(elapsed * ghostBobSpeed) * ghostBobAmount;
+    // Bob up and down (Y axis) while standing on the floor
+    ghost.position.y = ghostBaseY + Math.sin(elapsed * mind.behaviorParams.bobSpeed) * mind.behaviorParams.bobAmount;
   }
 
   renderer.render(scene, camera);

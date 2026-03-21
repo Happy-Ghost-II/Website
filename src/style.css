@@ -16,3 +16,75 @@ canvas#scene {
   width: 100%;
   height: 100%;
 }
+
+/* ── Ghost thoughts panel ─────────────────────────── */
+#thoughts-panel {
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  right: 8%;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0a;
+  border: 1px solid #3a3a3a;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #33ff33;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#thoughts-title {
+  background: #1a1a1a;
+  border-bottom: 1px solid #3a3a3a;
+  padding: 3px 6px;
+  font-size: 10px;
+  color: #33ff33;
+  letter-spacing: 0.5px;
+}
+
+#thoughts-content {
+  padding: 6px 8px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-y: auto;
+  flex: 1;
+  pointer-events: auto;
+}
+
+#thoughts-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+#thoughts-content::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+#thoughts-content::-webkit-scrollbar-thumb {
+  background: #1a3a1a;
+  border: 1px solid #33ff33;
+}
+
+#thoughts-content::-webkit-scrollbar-thumb:hover {
+  background: #2a4a2a;
+}
+
+#thoughts-content {
+  scrollbar-color: #1a3a1a #0a0a0a;
+  scrollbar-width: thin;
+}
+
+.thought-entry {
+  margin: 0 0 8px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #1a2a1a;
+}
+
+#thoughts-cursor {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
