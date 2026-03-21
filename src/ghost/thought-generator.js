@@ -21,8 +21,8 @@ export class ThoughtGenerator {
   async init(onProgress) {
     this.wllama = new Wllama(WASM_PATHS);
     await this.wllama.loadModelFromHF(
-      'ggml-org/models',
-      'tinyllamas/stories15M-q4_0.gguf',
+      'bartowski/SmolLM2-135M-Instruct-GGUF',
+      'SmolLM2-135M-Instruct-Q8_0.gguf',
       {
         n_threads: 1,
         progressCallback: onProgress,
@@ -39,7 +39,7 @@ export class ThoughtGenerator {
     if (idx !== -1) this.listeners.splice(idx, 1);
   }
 
-  async generate(prompt, { displayPrefix = '', nPredict = 120, temp = 1.3, top_k = 40, top_p = 0.9 } = {}) {
+  async generate(prompt, { displayPrefix = '', nPredict = 80, temp = 0.9, top_k = 40, top_p = 0.9 } = {}) {
     if (this.isGenerating || !this.wllama) return null;
     this.isGenerating = true;
 
@@ -53,7 +53,7 @@ export class ThoughtGenerator {
 
     await this.wllama.createCompletion(prompt, {
       nPredict,
-      sampling: { temp, top_k, top_p },
+      sampling: { temp, top_k, top_p, penalty_repeat: 1.3, penalty_last_n: 64 },
       abortSignal: abortController.signal,
       onNewToken: (_token, _piece, currentText) => {
         fullText = currentText;

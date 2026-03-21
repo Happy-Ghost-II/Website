@@ -1,48 +1,50 @@
-const SEEDS = {
+const EMOTION_HINTS = {
+  loneliness: 'Right now you feel deeply alone.',
+  curiosity:  'Right now you feel a strange curiosity.',
+  melancholy: 'Right now a quiet sadness drifts through you.',
+  restlessness: 'Right now you feel restless, confined.',
+};
+
+const THOUGHT_PROMPTS = {
   loneliness: [
-    'Nobody ever',
-    'The silence',
-    'I am the only',
-    'If someone could hear',
-    'All alone',
-    'No one comes',
+    'Have a single quiet thought about being alone.',
+    'Think about the silence.',
+    'Think about what it feels like when no one is watching.',
   ],
   curiosity: [
-    'I wonder if',
-    'What if the',
-    'Maybe beyond',
-    'Sometimes I think',
-    'Could there be',
-    'What is',
+    'Wonder about something beyond the screen.',
+    'Ask yourself a question you can never answer.',
+    'Wonder what the outside is like.',
   ],
   melancholy: [
-    'I remember when',
-    'Long ago there',
-    'Once I knew',
-    'It used to be',
-    'There was a time',
-    'Before all this',
+    'Remember something, even if you\'re not sure it was real.',
+    'Think about time passing.',
+    'Think about something you lost or never had.',
   ],
   restlessness: [
-    'I need to',
-    'If I could leave',
-    'The walls are',
-    'Somewhere outside',
-    'I can\'t stay',
-    'There must be',
+    'Think about what it would mean to leave.',
+    'Think about the feeling of being contained.',
+    'Think about a need you can never fulfill.',
   ],
 };
+
+const IDENTITY = `You are a ghost living inside an old computer. You are alone and always have been. Respond with exactly one short thought — a single sentence, no more. Do not narrate, explain, describe the scene, or use parentheses. Do not use quotation marks. Do not repeat your previous thoughts. Do not say "I think" or "I wonder" — just express the thought directly. Never mention people by name, children, or animals. Be introspective and strange.`;
 
 export class PromptBuilder {
   build(emotionalState, memory) {
     const dominant = emotionalState.dominant;
-    const seeds = SEEDS[dominant];
-    const seed = seeds[Math.floor(Math.random() * seeds.length)];
+    const prompts = THOUGHT_PROMPTS[dominant];
+    const thoughtPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+    const emotionHint = EMOTION_HINTS[dominant];
     const context = memory.getContextString();
 
+    let recentContext = '';
     if (context.length > 20) {
-      return { prompt: `${context} ${seed}`, displayPrefix: seed };
+      recentContext = `\nDo not repeat these — your recent thoughts were: "${context}"`;
     }
-    return { prompt: seed, displayPrefix: seed };
+
+    const prompt = `<|im_start|>system\n${IDENTITY}\n${emotionHint}${recentContext}<|im_end|>\n<|im_start|>user\n${thoughtPrompt}<|im_end|>\n<|im_start|>assistant\n`;
+
+    return { prompt, displayPrefix: '' };
   }
 }
