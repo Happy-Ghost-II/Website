@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@wllama/wllama": "^2.3.7",
     "three": "^0.172.0"
   },

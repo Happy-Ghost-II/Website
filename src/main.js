@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GhostMind } from './ghost/ghost-mind.js';
+import { AffectPlot } from './ghost/affect-plot.js';
+import { GhostBody } from './ghost/ghost-body.js';
 
 // ── Renderer ──────────────────────────────────────────
 const canvas = document.getElementById('scene');
@@ -75,44 +77,122 @@ function loadModel(filename, addToScene = true) {
 // ── Ghost state ──────────────────────────────────────
 let ghost = null;
 let ghostBounds = null;
-let ghostTarget = new THREE.Vector3();
-let ghostVelocity = new THREE.Vector3();
+let ghostBody = null;
 // Ghost mind — cognitive architecture
 const mind = new GhostMind();
+const affectPlot = new AffectPlot('affect-plot');
 const thoughtsContent = document.getElementById('thoughts-content');
 
 let currentThoughtEl = null;
+let isUserScrolledUp = false;
+const scrollBtn = document.getElementById('scroll-to-bottom');
+
+function isNearBottom() {
+  return thoughtsContent.scrollHeight - thoughtsContent.scrollTop - thoughtsContent.clientHeight < 30;
+}
+
+thoughtsContent.addEventListener('scroll', () => {
+  isUserScrolledUp = !isNearBottom();
+  scrollBtn.classList.toggle('visible', isUserScrolledUp);
+});
+
+scrollBtn.addEventListener('click', () => {
+  thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
+  isUserScrolledUp = false;
+  scrollBtn.classList.remove('visible');
+});
+
+// Typewriter reveal system
+let revealBuffer = '';
+let revealIndex = 0;
+let revealTimeout = null;
+let generationDone = false;
+
+// Base reveal speed — modulated by arousal
+let revealBaseMs = 55; // ms per character at neutral arousal
+
+// Cursor element
+const cursorEl = document.createElement('span');
+cursorEl.id = 'thoughts-cursor';
+thoughtsContent.appendChild(cursorEl);
+
+let revealVisible = null;
+let revealHidden = null;
+
+function ensureThoughtEl() {
+  if (!currentThoughtEl) {
+    currentThoughtEl = document.createElement('span');
+    currentThoughtEl.className = 'thought-entry';
+    revealVisible = document.createElement('span');
+    revealHidden = document.createElement('span');
+    revealHidden.className = 'thought-unrevealed';
+    currentThoughtEl.appendChild(revealVisible);
+    // Cursor goes between visible and hidden text
+    currentThoughtEl.appendChild(cursorEl);
+    currentThoughtEl.appendChild(revealHidden);
+    thoughtsContent.appendChild(currentThoughtEl);
+  }
+}
+
+function nextRevealDelay() {
+  const noise = 1.0 + (Math.random() - 0.5) * 0.6;
+  return revealBaseMs * noise;
+}
+
+function revealNextChar() {
+  if (revealIndex < revealBuffer.length) {
+    revealIndex++;
+    revealVisible.textContent = revealBuffer.slice(0, revealIndex);
+    revealHidden.textContent = revealBuffer.slice(revealIndex);
+    if (!isUserScrolledUp) {
+      thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
+    }
+    revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
+  } else if (generationDone) {
+    revealTimeout = null;
+    // Show full text, clean up hidden span, move cursor out
+    if (revealVisible && revealHidden) {
+      revealVisible.textContent = revealBuffer;
+      revealHidden.remove();
+      cursorEl.remove();
+    }
+    currentThoughtEl = null;
+    revealVisible = null;
+    revealHidden = null;
+    revealBuffer = '';
+    revealIndex = 0;
+    generationDone = false;
+    // Cursor on a new line, waiting
+    thoughtsContent.appendChild(document.createElement('br'));
+    thoughtsContent.appendChild(document.createElement('br'));
+    thoughtsContent.appendChild(cursorEl);
+    if (!isUserScrolledUp) {
+      thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
+    }
+  } else {
+    revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
+  }
+}
+
+function startReveal() {
+  if (revealTimeout) return;
+  revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
+}
 
 mind.thoughtGenerator.addListener({
   onToken(text) {
-    if (!currentThoughtEl) {
-      currentThoughtEl = document.createElement('p');
-      currentThoughtEl.className = 'thought-entry';
-      thoughtsContent.insertBefore(currentThoughtEl, document.getElementById('thoughts-cursor'));
-    }
-    currentThoughtEl.textContent = text;
-    thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
+    ensureThoughtEl();
+    revealBuffer = text;
+    // Update both spans — visible shows what's revealed, hidden holds the rest for layout
+    revealVisible.textContent = revealBuffer.slice(0, revealIndex);
+    revealHidden.textContent = revealBuffer.slice(revealIndex);
+    generationDone = false;
+    startReveal();
   },
   onComplete() {
-    currentThoughtEl = null;
+    generationDone = true;
   },
 });
-let ghostBaseY = 0;
-let ghostBaseZ = 0;
-let ghostPauseTimer = 0;
-let ghostState = 'moving'; // 'moving' or 'paused'
-// Pre-allocated temp vectors to avoid per-frame allocation
-const _dir = new THREE.Vector3();
-const _scaled = new THREE.Vector3();
-
-function pickNewGhostTarget() {
-  if (!ghostBounds) return;
-  ghostTarget.set(
-    THREE.MathUtils.lerp(ghostBounds.min.x, ghostBounds.max.x, Math.random()),
-    ghostBaseY,
-    ghostBaseZ,
-  );
-}
 
 // ── Load Models ──────────────────────────────────────
 Promise.all([
@@ -191,13 +271,12 @@ Promise.all([
     ghostBounds.min.x += ghostSize.x * 0.5;
     ghostBounds.max.x -= ghostSize.x * 0.5;
 
-    // Set floor/ceiling so ghost mesh stays fully inside
-    const boundsCenter = ghostBounds.getCenter(new THREE.Vector3());
-    ghostBaseY = ghostBounds.min.y + meshBottomBelowOrigin + mind.behaviorParams.bobAmount;
-    ghostBaseZ = boundsCenter.z;
-    ghost.position.set(boundsCenter.x, ghostBaseY, ghostBaseZ);
+    // Create physics body
+    console.log('bounds Y:', ghostBounds.min.y, 'to', ghostBounds.max.y);
+    console.log('mesh offsets: bottom', meshBottomBelowOrigin, 'top', meshTopAboveOrigin);
+    ghostBody = new GhostBody(ghost, ghostBounds, meshBottomBelowOrigin, meshTopAboveOrigin);
+    console.log('ghostBody Y range:', ghostBody._minY, 'to', ghostBody._maxY, 'starting at', ghostBody._posY);
     scene.add(ghost);
-    pickNewGhostTarget();
   }
 
   // Position monitor glow at the screen face (front of bounds, centered)
@@ -240,12 +319,21 @@ Promise.all([
   fitCamera();
 
   // Start the ghost's brain
-  const loadingEl = document.createElement('p');
+  const loadingEl = document.createElement('span');
   loadingEl.className = 'thought-entry';
   loadingEl.textContent = 'loading...';
-  thoughtsContent.insertBefore(loadingEl, document.getElementById('thoughts-cursor'));
-  mind.init(({ loaded, total }) => {
-    loadingEl.textContent = `loading brain... ${Math.round((loaded / total) * 100)}%`;
+  thoughtsContent.insertBefore(loadingEl, cursorEl);
+  mind.init(({ phase, loaded, total }) => {
+    if (loaded != null && total) {
+      const pct = Math.round((loaded / total) * 100);
+      if (phase === 'brain') {
+        loadingEl.textContent = `loading brain... ${pct}%`;
+      } else if (phase === 'affect') {
+        loadingEl.textContent = `loading affect... ${pct}%`;
+      }
+    } else if (phase === 'affect') {
+      loadingEl.textContent = 'loading affect...';
+    }
   }).then(() => {
     loadingEl.remove();
     mind.start();
@@ -282,49 +370,19 @@ const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = clock.getDelta();
-  const elapsed = clock.getElapsedTime();
+  const delta = Math.min(clock.getDelta(), 0.1); // cap at 100ms to prevent explosion after tab switch
 
-  if (ghost && ghostBounds) {
-    if (ghostState === 'paused') {
-      ghostPauseTimer -= delta;
-      if (ghostPauseTimer <= 0) {
-        ghostState = 'moving';
-        pickNewGhostTarget();
-      }
-    } else {
-      _dir.subVectors(ghostTarget, ghost.position);
-      _dir.y = 0; // only move in X (left/right along the floor)
-      _dir.z = 0;
-      const dist = _dir.length();
+  // Integrate affect dynamics continuously
+  mind.update(delta);
+  affectPlot.draw(mind.affect);
 
-      if (dist < 0.02) {
-        // Arrived — pause for 1–4 seconds
-        ghostState = 'paused';
-        ghostPauseTimer = mind.behaviorParams.pauseDuration * (0.5 + Math.random());
-        ghostVelocity.set(0, 0, 0);
-      } else {
-        _dir.normalize();
-        ghostVelocity.lerp(_dir.multiplyScalar(mind.behaviorParams.moveSpeed), delta * 2);
-        _scaled.copy(ghostVelocity).multiplyScalar(delta);
-        ghost.position.add(_scaled);
+  // Arousal modulates typing speed: high arousal = faster reveal
+  const arousalT = (mind.affect.arousal + 1) / 2; // 0..1
+  revealBaseMs = 35 + (1 - arousalT) * 50; // 35ms (aroused) to 85ms (calm)
 
-        ghost.position.x = THREE.MathUtils.clamp(ghost.position.x, ghostBounds.min.x, ghostBounds.max.x);
-
-        // Turn to face movement direction (rotate around Y axis)
-        if (ghostVelocity.length() > 0.001) {
-          const targetAngle = Math.atan2(ghostVelocity.x, ghostVelocity.z);
-          let currentAngle = ghost.rotation.y;
-          let angleDiff = targetAngle - currentAngle;
-          while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-          while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-          ghost.rotation.y += angleDiff * delta * 4;
-        }
-      }
-    }
-
-    // Bob up and down (Y axis) while standing on the floor
-    ghost.position.y = ghostBaseY + Math.sin(elapsed * mind.behaviorParams.bobSpeed) * mind.behaviorParams.bobAmount;
+  if (ghostBody) {
+    ghostBody.syncParams(mind.behaviorParams);
+    ghostBody.update(delta);
   }
 
   renderer.render(scene, camera);

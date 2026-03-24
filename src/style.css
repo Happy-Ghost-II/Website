@@ -76,15 +76,79 @@ canvas#scene {
 }
 
 .thought-entry {
-  margin: 0 0 8px 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #1a2a1a;
+  display: inline;
+}
+
+.thought-unrevealed {
+  color: transparent;
+}
+
+#scroll-to-bottom {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid #33ff33;
+  background: #0a0a0a;
+  color: #33ff33;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+#scroll-to-bottom.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#scroll-to-bottom:hover {
+  background: #1a2a1a;
+}
+
+#thoughts-cursor::after {
+  content: '_';
 }
 
 #thoughts-cursor {
-  animation: blink 1s step-end infinite;
+  animation: cursor-blink 1s step-end infinite;
 }
 
-@keyframes blink {
+@keyframes cursor-blink {
   50% { opacity: 0; }
+}
+
+/* ── Affect monitor panel ─────────────────────────── */
+#affect-panel {
+  position: absolute;
+  top: 8%;
+  left: 8%;
+  width: 200px;
+  background: #0a0a0a;
+  border: 1px solid #3a3a3a;
+  font-family: 'Courier New', monospace;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#affect-title {
+  background: #1a1a1a;
+  border-bottom: 1px solid #3a3a3a;
+  padding: 3px 6px;
+  font-size: 10px;
+  color: #33ff33;
+  letter-spacing: 0.5px;
+}
+
+#affect-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  padding: 10px;
 }

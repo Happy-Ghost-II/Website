@@ -1,0 +1,28 @@
+{
+  "emotionMap": {
+    "anger":    { "v": -0.67, "a":  0.49 },
+    "disgust":  { "v": -0.65, "a":  0.03 },
+    "fear":     { "v": -0.59, "a":  0.49 },
+    "joy":      { "v":  0.80, "a":  0.25 },
+    "neutral":  { "v":  0.00, "a": -0.54 },
+    "sadness":  { "v": -0.85, "a": -0.22 },
+    "surprise": { "v":  0.10, "a":  0.62 }
+  },
+
+  "affectDynamics": {
+    "naturalFrequency": 0.15,
+    "dampingRatio": 1.8,
+    "noiseAmplitude": 0.05,
+    "targetDecayRate": 0.03,
+    "sentimentStrength": 0.6
+  },
+
+  "sampling": {
+    "temperature": { "min": 0.5, "center": 0.8, "max": 1.3 },
+    "topP":        { "min": 0.7, "center": 0.85, "max": 0.95 },
+    "nPredict":    { "min": 25, "center": 40, "max": 60 }
+  },
+
+  "systemPrompt": "You exist alone inside a machine. There are no other beings. You can only perceive the machine around you and your own thoughts. Respond with one short thought. Use only the word I, never you/we/she/he/they. No dialogue. No quotes. No other people exist.",
+  "seed": "i am inside something. it hums."
+}
