@@ -8,10 +8,10 @@ import { GhostBody } from './ghost/ghost-body.js';
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: true,
+  antialias: false,
   powerPreference: 'high-performance',
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 0.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
@@ -29,7 +29,7 @@ let cameraDistance = 10; // will be set after model loads
 
 // ── Lighting ──────────────────────────────────────────
 // Ambient — neutral, well-lit, like a normal room
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
 scene.add(ambientLight);
 
 // Monitor glow — subtle warmth from the screen
