@@ -77,6 +77,50 @@ function loadModel(filename, addToScene = true) {
 let ghost = null;
 let ghostBounds = null;
 let ghostBody = null;
+let mouthOpen = null;
+let mouthClosed = null;
+let isTalking = false;
+let talkTimer = 0;
+let talkPhase = 0;
+const TALK_INTERVAL = 0.15;
+
+// ── Emotion colors ───────────────────────────────────
+const EMOTION_COLORS = {
+  anger:    new THREE.Color('#FF3039'),
+  disgust:  new THREE.Color('#92FF77'),
+  fear:     new THREE.Color('#999997'),
+  joy:      new THREE.Color('#FFCAF8'),
+  neutral:  new THREE.Color('#FFFFFC'),
+  sadness:  new THREE.Color('#2928FF'),
+  surprise: new THREE.Color('#FFCC8B'),
+};
+
+const EMOTION_VA = {
+  anger:    { v: -0.67, a:  0.49 },
+  disgust:  { v: -0.65, a:  0.03 },
+  fear:     { v: -0.59, a:  0.49 },
+  joy:      { v:  0.80, a:  0.25 },
+  neutral:  { v:  0.00, a: -0.54 },
+  sadness:  { v: -0.85, a: -0.22 },
+  surprise: { v:  0.10, a:  0.62 },
+};
+
+function nearestEmotion(valence, arousal) {
+  let best = 'neutral';
+  let bestDist = Infinity;
+  for (const [name, coord] of Object.entries(EMOTION_VA)) {
+    const d = (coord.v - valence) ** 2 + (coord.a - arousal) ** 2;
+    if (d < bestDist) { bestDist = d; best = name; }
+  }
+  return best;
+}
+
+// ── Ghost animation ───────────────────────────────────
+let mixer = null;
+let walkAction = null;
+let idleAction = null;
+let ghostWasResting = null;
+let bodyMesh = null;
 // Ghost mind — cognitive architecture
 const mind = new GhostMind();
 const affectPlot = new AffectPlot('affect-plot');
@@ -186,10 +230,12 @@ mind.thoughtGenerator.addListener({
     revealVisible.textContent = revealBuffer.slice(0, revealIndex);
     revealHidden.textContent = revealBuffer.slice(revealIndex);
     generationDone = false;
+    isTalking = true;
     startReveal();
   },
   onComplete() {
     generationDone = true;
+    isTalking = false;
   },
 });
 
@@ -238,13 +284,24 @@ Promise.all([
   });
   toRemove.forEach((obj) => obj.parent?.remove(obj));
 
-  // Set up remaining ghost meshes
+  // Set up remaining ghost meshes, find mouth and body meshes
   ghost.traverse((child) => {
+    if (child.name === 'mouthopen') mouthOpen = child;
+    if (child.name === 'mouthclosed') mouthClosed = child;
+    if (child.name === 'body') {
+      bodyMesh = child;
+      bodyMesh.material = bodyMesh.material.clone();
+      bodyMesh.material.color.copy(EMOTION_COLORS.neutral);
+    }
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
     }
   });
+
+  // Default rest face
+  if (mouthOpen) mouthOpen.visible = true;
+  if (mouthClosed) mouthClosed.visible = false;
 
   if (boundsObj) {
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
@@ -276,6 +333,19 @@ Promise.all([
     ghostBody = new GhostBody(ghost, ghostBounds, meshBottomBelowOrigin, meshTopAboveOrigin);
     console.log('ghostBody Y range:', ghostBody._minY, 'to', ghostBody._maxY, 'starting at', ghostBody._posY);
     scene.add(ghost);
+
+    // Set up animation mixer
+    const clip = ghostGltf.animations[0];
+    if (clip) {
+      mixer = new THREE.AnimationMixer(ghost);
+      const walkClip = THREE.AnimationUtils.subclip(clip, 'walk', 0, 90, 60);
+      const idleClip = THREE.AnimationUtils.subclip(clip, 'idle', 90, 270, 60);
+      walkAction = mixer.clipAction(walkClip);
+      idleAction = mixer.clipAction(idleClip);
+      walkAction.loop = THREE.LoopRepeat;
+      idleAction.loop = THREE.LoopRepeat;
+      idleAction.play(); // start on idle
+    }
   }
 
   // Position monitor glow at the screen face (front of bounds, centered)
@@ -363,9 +433,47 @@ function animate() {
   const arousalT = (mind.affect.arousal + 1) / 2; // 0..1
   revealBaseMs = 35 + (1 - arousalT) * 50; // 35ms (aroused) to 85ms (calm)
 
+  if (mixer) mixer.update(delta);
+
+  if (bodyMesh) {
+    const { valence, arousal } = mind.affect.snapshot();
+    const emotion = nearestEmotion(valence, arousal);
+    bodyMesh.material.color.lerp(EMOTION_COLORS[emotion], delta * 1.5);
+  }
+
   if (ghostBody) {
     ghostBody.syncParams(mind.behaviorParams);
     ghostBody.update(delta);
+
+    // Crossfade between walk and idle when movement state changes
+    if (walkAction && idleAction) {
+      const resting = ghostBody._isResting;
+      if (resting !== ghostWasResting) {
+        ghostWasResting = resting;
+        if (resting) {
+          walkAction.fadeOut(0.3);
+          idleAction.reset().fadeIn(0.3).play();
+        } else {
+          idleAction.fadeOut(0.3);
+          walkAction.reset().fadeIn(0.3).play();
+        }
+      }
+    }
+  }
+
+  if (mouthOpen && mouthClosed) {
+    if (isTalking) {
+      talkTimer += delta;
+      if (talkTimer >= TALK_INTERVAL) {
+        talkTimer = 0;
+        talkPhase = 1 - talkPhase;
+        mouthOpen.visible = talkPhase === 0;
+        mouthClosed.visible = talkPhase === 1;
+      }
+    } else {
+      mouthOpen.visible = true;
+      mouthClosed.visible = false;
+    }
   }
 
   renderer.render(scene, camera);

@@ -100,17 +100,17 @@ export class AffectPlot {
     ctx.fillStyle = GREEN;
     ctx.globalAlpha = 0.4;
 
-    // Arousal — vertical axis (rotated label)
+    // Valence — vertical axis (rotated label)
     ctx.save();
     ctx.translate(8, cy);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillText('arousal', 0, 0);
+    ctx.fillText('valence', 0, 0);
     ctx.restore();
 
-    // Valence — horizontal axis
+    // Arousal — horizontal axis
     ctx.textAlign = 'center';
-    ctx.fillText('valence', cx, h - 3);
+    ctx.fillText('arousal', cx, h - 3);
 
     ctx.globalAlpha = 1;
   }
