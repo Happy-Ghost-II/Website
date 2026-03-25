@@ -23,10 +23,9 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-// ── Camera (orthographic with slight downward angle) ──
-const cameraPitch = THREE.MathUtils.degToRad(20); // slight downward tilt
-const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
-let cameraFitSize = 1; // will be set after model loads
+// ── Camera ────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(39.6, window.innerWidth / window.innerHeight, 0.1, 1000);
+let cameraDistance = 10; // will be set after model loads
 
 // ── Lighting ──────────────────────────────────────────
 // Ambient — neutral, well-lit, like a normal room
@@ -304,17 +303,14 @@ Promise.all([
   edgeLight.target.position.set(0, 0, 0);
   scene.add(edgeLight.target);
 
-  // Fit camera — size the ortho frustum to the model
+  // Fit camera — compute distance so model fills viewport at FOV 39.6°
   const padding = 1.1;
-  cameraFitSize = Math.max(fullSize.x, fullSize.y) * padding * 0.5;
+  const halfFitSize = Math.max(fullSize.x, fullSize.y) * padding * 0.5;
+  const vFovRad = THREE.MathUtils.degToRad(39.6);
+  cameraDistance = halfFitSize / Math.tan(vFovRad / 2);
 
-  // Position camera: looking slightly downward
-  const cameraDistance = 10;
-  camera.position.set(
-    0,
-    Math.sin(cameraPitch) * cameraDistance,
-    Math.cos(cameraPitch) * cameraDistance,
-  );
+  // Position camera: straight on
+  camera.position.set(0, 0, cameraDistance);
   camera.lookAt(0, 0, 0);
   fitCamera();
 
@@ -342,20 +338,7 @@ Promise.all([
 
 // ── Resize ────────────────────────────────────────────
 function fitCamera() {
-  const aspect = window.innerWidth / window.innerHeight;
-  if (aspect >= 1) {
-    // Landscape / square: fit height, expand width
-    camera.top = cameraFitSize;
-    camera.bottom = -cameraFitSize;
-    camera.left = -cameraFitSize * aspect;
-    camera.right = cameraFitSize * aspect;
-  } else {
-    // Portrait (mobile): fit width, expand height
-    camera.left = -cameraFitSize;
-    camera.right = cameraFitSize;
-    camera.top = cameraFitSize / aspect;
-    camera.bottom = -cameraFitSize / aspect;
-  }
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
