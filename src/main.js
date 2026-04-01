@@ -209,6 +209,8 @@ function revealNextChar() {
     revealBuffer = '';
     revealIndex = 0;
     generationDone = false;
+    // Done thinking — ghost can move again
+    if (ghostBody) ghostBody.isThinking = false;
     // Cursor on a new line, waiting
     thoughtsContent.appendChild(document.createElement('br'));
     thoughtsContent.appendChild(document.createElement('br'));
@@ -230,10 +232,11 @@ mind.thoughtGenerator.addListener({
   onToken(text) {
     ensureThoughtEl();
     revealBuffer = text;
-    // Update both spans — visible shows what's revealed, hidden holds the rest for layout
     revealVisible.textContent = revealBuffer.slice(0, revealIndex);
     revealHidden.textContent = revealBuffer.slice(revealIndex);
     generationDone = false;
+    // Ghost pauses and looks at camera while thinking
+    if (ghostBody) ghostBody.isThinking = true;
     isTalking = true;
     startReveal();
   },

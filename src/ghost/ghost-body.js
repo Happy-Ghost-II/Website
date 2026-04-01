@@ -28,6 +28,9 @@ export class GhostBody {
     this._swayPhase = Math.random() * Math.PI * 2;
     this._depthPhase = Math.random() * Math.PI * 2;
 
+    // Thinking state — ghost pauses and looks at camera
+    this.isThinking = false;
+
     // Attractors (future-ready)
     this._attractors = [];
     this._nextAttractorId = 0;
@@ -114,11 +117,16 @@ export class GhostBody {
 
     // ── Destination management ──
 
-    if (this._isResting) {
+    if (this.isThinking) {
+      // Thinking — coast to a stop, don't pick new destinations
+      if (!this._isResting) {
+        this._isResting = true;
+        this._restTimer = 1 + Math.random() * 2; // brief pause after thinking ends
+      }
+    } else if (this._isResting) {
       this._restTimer -= dt;
       if (this._restTimer <= 0) {
         this._destinationX = this._pickGoodDestination();
-        console.log('Ghost moving from', this._posX.toFixed(3), 'to', this._destinationX.toFixed(3), 'dist', Math.abs(this._destinationX - this._posX).toFixed(3));
         this._isResting = false;
       }
     } else if (distRemaining < p.arrivalDistance) {
@@ -133,7 +141,6 @@ export class GhostBody {
 
     let targetSpeed = 0;
     if (!this._isResting && distRemaining > p.arrivalDistance) {
-      // Ease out as we approach destination
       const rampDown = Math.min(1, distRemaining / p.decelDistance);
       targetSpeed = p.maxSpeed * rampDown;
     }
@@ -151,10 +158,13 @@ export class GhostBody {
 
     // ── Rotation ──
 
-    // One target angle — either facing destination or idle look direction
+    // One target angle
     let targetAngle;
-    if (!this._isResting && distRemaining > p.arrivalDistance) {
-      // Moving — face the destination fully
+    if (this.isThinking) {
+      // Thinking — face the camera (Y rotation = 0)
+      targetAngle = 0;
+    } else if (!this._isResting && distRemaining > p.arrivalDistance) {
+      // Moving — face the destination
       targetAngle = dx > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
     } else {
       // Resting — face the idle look direction
