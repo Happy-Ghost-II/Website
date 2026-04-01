@@ -9,7 +9,8 @@
       "Bash(magick --version)",
       "Bash(convert --version)",
       "Bash(python -c \"from PIL import Image; print\\('pillow ok'\\)\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(node:*)"
     ]
   }
 }
