@@ -20,9 +20,8 @@ canvas#scene {
 /* ── Ghost thoughts panel ─────────────────────────── */
 #thoughts-panel {
   position: absolute;
-  top: 8%;
-  bottom: 8%;
-  right: 8%;
+  top: 6%;
+  bottom: 33%;
   width: 220px;
   display: flex;
   flex-direction: column;

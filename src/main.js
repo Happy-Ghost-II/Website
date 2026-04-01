@@ -11,7 +11,7 @@ const renderer = new THREE.WebGLRenderer({
   antialias: false,
   powerPreference: 'high-performance',
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 0.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 0.8));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
@@ -72,6 +72,10 @@ function loadModel(filename, addToScene = true) {
     );
   });
 }
+
+// ── Panel anchoring ───────────────────────────────────
+let computerEdgeWorld = null; // right edge of computer in world space
+const thoughtsPanel = document.getElementById('thoughts-panel');
 
 // ── Ghost state ──────────────────────────────────────
 let ghost = null;
@@ -266,6 +270,9 @@ Promise.all([
   model.position.sub(center);
   model.updateMatrixWorld(true);
 
+  // Store the right edge in world space (model is now centered at origin)
+  computerEdgeWorld = new THREE.Vector3(box.max.x - center.x, 0, 0);
+
   // Find MonitorBounds
   let boundsObj = null;
   model.traverse((child) => {
@@ -300,8 +307,8 @@ Promise.all([
   });
 
   // Default rest face
-  if (mouthOpen) mouthOpen.visible = true;
-  if (mouthClosed) mouthClosed.visible = false;
+  if (mouthOpen) mouthOpen.visible = false;
+  if (mouthClosed) mouthClosed.visible = true;
 
   if (boundsObj) {
     ghostBounds = new THREE.Box3().setFromObject(boundsObj);
@@ -374,7 +381,7 @@ Promise.all([
   scene.add(edgeLight.target);
 
   // Fit camera — compute distance so model fills viewport at FOV 39.6°
-  const padding = 1.1;
+  const padding = 0.85;
   const halfFitSize = Math.max(fullSize.x, fullSize.y) * padding * 0.5;
   const vFovRad = THREE.MathUtils.degToRad(39.6);
   cameraDistance = halfFitSize / Math.tan(vFovRad / 2);
@@ -471,9 +478,16 @@ function animate() {
         mouthClosed.visible = talkPhase === 1;
       }
     } else {
-      mouthOpen.visible = true;
-      mouthClosed.visible = false;
+      mouthOpen.visible = false;
+      mouthClosed.visible = true;
     }
+  }
+
+  // Anchor thoughts panel to right edge of computer model
+  if (computerEdgeWorld) {
+    const projected = computerEdgeWorld.clone().project(camera);
+    const screenX = (projected.x + 1) / 2 * window.innerWidth;
+    thoughtsPanel.style.left = (screenX - 173) + 'px';
   }
 
   renderer.render(scene, camera);
