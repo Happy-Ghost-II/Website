@@ -6,12 +6,12 @@ export class AffectPlot {
   constructor(canvasId) {
     this.canvas = document.getElementById(canvasId);
     this.ctx = this.canvas.getContext('2d');
-    this.w = this.canvas.width;
-    this.h = this.canvas.height;
   }
 
   draw(affect) {
-    const { ctx, w, h } = this;
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
     const cx = w / 2;
     const cy = h / 2;
 
@@ -100,17 +100,17 @@ export class AffectPlot {
     ctx.fillStyle = GREEN;
     ctx.globalAlpha = 0.4;
 
-    // Valence — vertical axis (rotated label)
+    // Arousal — vertical axis (rotated label)
     ctx.save();
     ctx.translate(8, cy);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillText('valence', 0, 0);
+    ctx.fillText('arousal', 0, 0);
     ctx.restore();
 
-    // Arousal — horizontal axis
+    // Valence — horizontal axis
     ctx.textAlign = 'center';
-    ctx.fillText('arousal', cx, h - 3);
+    ctx.fillText('valence', cx, h - 3);
 
     ctx.globalAlpha = 1;
   }

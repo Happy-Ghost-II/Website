@@ -10,7 +10,8 @@
       "Bash(convert --version)",
       "Bash(python -c \"from PIL import Image; print\\('pillow ok'\\)\")",
       "Bash(python:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(grep -n \"CSS3D\" /Users/Adam/HGII/Website/node_modules/three/examples/jsm/renderers/*.js)"
     ]
   }
 }

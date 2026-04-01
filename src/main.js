@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import { GhostMind } from './ghost/ghost-mind.js';
-// AffectPlot now renders directly to 3D mesh texture
 import { GhostBody } from './ghost/ghost-body.js';
+import { AffectPlot } from './ghost/affect-plot.js';
 
 // ── Renderer ──────────────────────────────────────────
 const canvas = document.getElementById('scene');
@@ -10,6 +11,7 @@ const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: false,
   powerPreference: 'high-performance',
+  alpha: true,
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -21,7 +23,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ── Scene ─────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
+// No scene.background — renderer clears to transparent so CSS3D layer shows through
+renderer.setClearColor(0x000000, 0);
 
 // ── Camera ────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(39.6, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -73,390 +76,146 @@ function loadModel(filename, addToScene = true) {
   });
 }
 
-// ── Textures on monitor meshes ────────────────────────
+// ── CSS3D renderer for thoughts panel ─────────────────
 let innerchatMesh = null;
 let emotionhudMesh = null;
-let affectCanvas = null;
-let affectCtx = null;
-let affectTexture = null;
-let affectCanvasW = 512;
-let affectCanvasH = 512;
-let chatCanvas = null;
-let chatCtx = null;
-let chatTexture = null;
-let chatCanvasW = 512;
-let chatCanvasH = 512;
+let css3dRenderer = null;
+let css3dScene = null;
+
+
 const thoughtsPanel = document.getElementById('thoughts-panel');
 
-function initChatTexture(mesh) {
+function initCSS3D() {
+  css3dScene = new THREE.Scene();
+  css3dRenderer = new CSS3DRenderer();
+  css3dRenderer.setSize(window.innerWidth, window.innerHeight);
+  css3dRenderer.domElement.style.position = 'absolute';
+  css3dRenderer.domElement.style.top = '0';
+  css3dRenderer.domElement.style.left = '0';
+  css3dRenderer.domElement.style.pointerEvents = 'none';
+  // Insert CSS3D layer BEHIND the WebGL canvas
+  css3dRenderer.domElement.style.background = '#000000';
+  document.body.insertBefore(css3dRenderer.domElement, document.getElementById('scene'));
+}
+
+function initThoughtsCSS3D(mesh) {
   mesh.updateMatrixWorld(true);
 
-  // Diagnose the mesh geometry
+  // Decompose the mesh's world transform
+  const worldPos = new THREE.Vector3();
+  const worldQuat = new THREE.Quaternion();
+  const worldScale = new THREE.Vector3();
+  mesh.matrixWorld.decompose(worldPos, worldQuat, worldScale);
+
+  // Get local geometry extents to compute the mesh face size in local space
   const geo = mesh.geometry;
-  const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
+  geo.computeBoundingBox();
+  const localBox = geo.boundingBox;
 
-  // Log all vertices and UVs to understand the mapping
-  console.log('=== innerchat mesh diagnostics ===');
-  console.log('Vertex count:', pos.count);
-  const idx = geo.index;
-  if (idx) {
-    const faces = [];
-    for (let i = 0; i < idx.count; i += 3) {
-      faces.push(`[${idx.getX(i)}, ${idx.getX(i+1)}, ${idx.getX(i+2)}]`);
-    }
-    console.log('Face indices:', faces.join(', '));
-  }
-  // Log the mesh's world matrix to see transforms
-  console.log('innerchat world matrix:', mesh.matrixWorld.elements.map(e => e.toFixed(4)).join(', '));
-  for (let i = 0; i < pos.count; i++) {
-    const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
-    const uvx = uv ? uv.getX(i) : '?', uvy = uv ? uv.getY(i) : '?';
-    console.log(`  v${i}: pos(${vx.toFixed(4)}, ${vy.toFixed(4)}, ${vz.toFixed(4)}) uv(${typeof uvx === 'number' ? uvx.toFixed(4) : uvx}, ${typeof uvy === 'number' ? uvy.toFixed(4) : uvy})`);
-  }
+  // Blender Z-up → Three.js Y-up: local X is width, local Z is height in Blender
+  // But GLTFLoader converts, so in world space X=width, Y=height
+  // Use the world-space bounding box for accurate dimensions
+  const worldBox = new THREE.Box3().setFromObject(mesh);
+  const worldSize = worldBox.getSize(new THREE.Vector3());
+  const meshWorldW = worldSize.x;
+  const meshWorldH = worldSize.y;
 
-  // Get world-space bounding box for aspect ratio
-  const box = new THREE.Box3().setFromObject(mesh);
-  const size = box.getSize(new THREE.Vector3());
-  console.log('innerchat world size:', size);
-  console.log('innerchat world center:', box.getCenter(new THREE.Vector3()));
+  console.log('CSS3D: meshWorldW', meshWorldW, 'meshWorldH', meshWorldH);
+  console.log('CSS3D: worldCenter', worldBox.getCenter(new THREE.Vector3()));
+  console.log('CSS3D: worldQuat', worldQuat);
 
-  // The screen face after world transform: X = width, Y = height
-  // Canvas aspect = width / height
-  const screenWidth = size.x;
-  const screenHeight = size.y;
-  const aspect = screenWidth / screenHeight;
-  console.log('Screen w/h:', screenWidth.toFixed(4), screenHeight.toFixed(4), 'aspect:', aspect.toFixed(4));
+  // CSS pixel dimensions for the panel
+  const panelPixelW = 300;
+  const panelPixelH = panelPixelW * (meshWorldH / meshWorldW);
 
-  // Higher resolution canvas for sharp text
-  chatCanvasH = 2048;
-  chatCanvasW = Math.round(chatCanvasH * aspect);
+  thoughtsPanel.style.width = panelPixelW + 'px';
+  thoughtsPanel.style.height = panelPixelH + 'px';
+  thoughtsPanel.style.position = 'absolute';
+  thoughtsPanel.style.display = 'flex';
+  thoughtsPanel.style.top = 'auto';
+  thoughtsPanel.style.left = 'auto';
+  thoughtsPanel.style.bottom = 'auto';
+  thoughtsPanel.style.right = 'auto';
+  thoughtsPanel.style.pointerEvents = 'auto';
+  thoughtsPanel.style.overflow = 'hidden';
 
-  chatCanvas = document.createElement('canvas');
-  chatCanvas.width = chatCanvasW;
-  chatCanvas.height = chatCanvasH;
-  chatCtx = chatCanvas.getContext('2d');
+  const cssObj = new CSS3DObject(thoughtsPanel);
 
-  chatTexture = new THREE.CanvasTexture(chatCanvas);
-  chatTexture.colorSpace = THREE.SRGBColorSpace;
-  chatTexture.flipY = false;
-  chatTexture.minFilter = THREE.LinearFilter;
-  chatTexture.magFilter = THREE.LinearFilter;
-  chatTexture.generateMipmaps = false;
+  // Position at the world-space center of the mesh
+  const worldCenter = worldBox.getCenter(new THREE.Vector3());
+  cssObj.position.copy(worldCenter);
 
+  // CSS3DObject defaults to facing +Z (toward camera) which is correct
+  // Don't apply the mesh quaternion — it includes the Blender Z-up→Y-up rotation
+
+  // Scale: CSS pixels → world units
+  const sx = meshWorldW / panelPixelW;
+  const sy = meshWorldH / panelPixelH;
+  cssObj.scale.set(sx, sy, 1);
+
+  css3dScene.add(cssObj);
+
+  // Make the mesh a transparent "window" — the CSS3D content shows through behind it
   mesh.material = new THREE.MeshBasicMaterial({
-    map: chatTexture,
-    color: 0xffffff,
+    color: 0x000000,
+    opacity: 0,
+    transparent: true,
+    blending: THREE.NoBlending,
   });
-
-  // Hide the HTML overlay
-  thoughtsPanel.style.display = 'none';
-
-  // Initial draw + cursor blink refresh
-  drawChatCanvas();
-  setInterval(drawChatCanvas, 500);
+  mesh.renderOrder = 1;
 }
 
-function drawChatCanvas() {
-  if (!chatCtx) return;
-  const W = chatCanvasW;
-  const H = chatCanvasH;
-
-  // Match the affect panel styling exactly:
-  // - #0a0a0a background
-  // - 1px #3a3a3a border
-  // - #1a1a1a title bar with #3a3a3a bottom border
-  // - Title: 10px Courier New, #33ff33, 3px 6px padding, 0.5px letter-spacing
-  // - Content: 11px Courier New, #33ff33, 6px 8px padding, line-height 1.5
-  // - Scrollbar: 6px wide, #0a0a0a track, #1a3a1a/#33ff33 thumb
-  //
-  // Scale factor: the affect panel renders at ~200px wide on screen.
-  // Our canvas is W pixels wide. So 1 CSS pixel = W/200 canvas pixels.
-  const SCALE = W / 200;
-
-  const BORDER = Math.round(1 * SCALE);
-  const TITLE_PAD_X = Math.round(6 * SCALE);
-  const TITLE_PAD_Y = Math.round(3 * SCALE);
-  const TITLE_FONT = Math.round(10 * SCALE);
-  const TITLE_H = TITLE_FONT + TITLE_PAD_Y * 2;
-  const CONTENT_PAD_X = Math.round(8 * SCALE);
-  const CONTENT_PAD_Y = Math.round(6 * SCALE);
-  const FONT_SIZE = Math.round(11 * SCALE);
-  const LINE_H = Math.round(FONT_SIZE * 1.5);
-  const SCROLLBAR_W = Math.round(6 * SCALE);
-  const MAX_WIDTH = W - CONTENT_PAD_X * 2 - SCROLLBAR_W - BORDER * 2;
-
-  // Background
-  chatCtx.fillStyle = '#0a0a0a';
-  chatCtx.fillRect(0, 0, W, H);
-
-  // Title bar
-  chatCtx.fillStyle = '#1a1a1a';
-  chatCtx.fillRect(BORDER, BORDER, W - BORDER * 2, TITLE_H);
-  chatCtx.strokeStyle = '#3a3a3a';
-  chatCtx.lineWidth = BORDER;
-  chatCtx.beginPath();
-  chatCtx.moveTo(BORDER, BORDER + TITLE_H);
-  chatCtx.lineTo(W - BORDER, BORDER + TITLE_H);
-  chatCtx.stroke();
-
-  // Title text
-  chatCtx.font = `${TITLE_FONT}px "Courier New", monospace`;
-  chatCtx.fillStyle = '#33ff33';
-  chatCtx.fillText('happy_thoughts2.exe', BORDER + TITLE_PAD_X, BORDER + TITLE_PAD_Y + TITLE_FONT * 0.85);
-
-  // Border
-  chatCtx.strokeStyle = '#3a3a3a';
-  chatCtx.lineWidth = BORDER;
-  chatCtx.strokeRect(BORDER / 2, BORDER / 2, W - BORDER, H - BORDER);
-
-  // Thought text
-  chatCtx.font = `${FONT_SIZE}px "Courier New", monospace`;
-  chatCtx.fillStyle = '#33ff33';
-
-  // Build line list
-  const allLines = [];
-  for (const thought of completedThoughts) {
-    const wrapped = wrapText(chatCtx, thought, MAX_WIDTH);
-    allLines.push(...wrapped);
-    allLines.push('');
-  }
-  const partial = revealBuffer.slice(0, revealIndex);
-  if (partial) {
-    allLines.push(...wrapText(chatCtx, partial, MAX_WIDTH));
-  }
-
-  // Visible lines
-  const textAreaTop = BORDER + TITLE_H + CONTENT_PAD_Y;
-  const textAreaH = H - textAreaTop - CONTENT_PAD_Y - BORDER;
-  const maxVisible = Math.floor(textAreaH / LINE_H);
-  const visible = allLines.slice(-maxVisible);
-
-  visible.forEach((line, i) => {
-    chatCtx.fillText(line, BORDER + CONTENT_PAD_X, textAreaTop + FONT_SIZE + i * LINE_H);
-  });
-
-  // Blinking cursor
-  if (Math.floor(Date.now() / 500) % 2 === 0) {
-    const lastLine = visible[visible.length - 1] ?? '';
-    const cursorX = BORDER + CONTENT_PAD_X + chatCtx.measureText(lastLine).width + 2;
-    const cursorY = textAreaTop + FONT_SIZE + Math.max(0, visible.length - 1) * LINE_H;
-    chatCtx.fillText('_', cursorX, cursorY);
-  }
-
-  // Scrollbar track
-  const sbX = W - BORDER - SCROLLBAR_W;
-  const sbTop = BORDER + TITLE_H + BORDER;
-  const sbH = H - sbTop - BORDER;
-  chatCtx.fillStyle = '#0a0a0a';
-  chatCtx.fillRect(sbX, sbTop, SCROLLBAR_W, sbH);
-
-  // Scrollbar thumb
-  const totalLines = allLines.length || 1;
-  const thumbRatio = Math.min(1, maxVisible / totalLines);
-  const thumbH = Math.max(Math.round(sbH * thumbRatio), Math.round(10 * SCALE));
-  const scrollRatio = totalLines <= maxVisible ? 0 : (totalLines - maxVisible) / totalLines;
-  const thumbY = sbTop + Math.round(scrollRatio * (sbH - thumbH));
-  chatCtx.fillStyle = '#1a3a1a';
-  chatCtx.fillRect(sbX, thumbY, SCROLLBAR_W, thumbH);
-  chatCtx.strokeStyle = '#33ff33';
-  chatCtx.lineWidth = BORDER;
-  chatCtx.strokeRect(sbX, thumbY, SCROLLBAR_W, thumbH);
-
-  if (chatTexture) chatTexture.needsUpdate = true;
-}
-
-function initAffectTexture(mesh) {
+function initAffectCSS3D(mesh) {
   mesh.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(mesh);
-  const size = box.getSize(new THREE.Vector3());
-  const aspect = size.x / size.y;
-  console.log('emotionhud size:', size, 'aspect:', aspect);
+  const worldBox = new THREE.Box3().setFromObject(mesh);
+  const worldSize = worldBox.getSize(new THREE.Vector3());
+  const worldCenter = worldBox.getCenter(new THREE.Vector3());
+  const meshWorldW = worldSize.x;
+  const meshWorldH = worldSize.y;
 
-  affectCanvasH = 2048;
-  affectCanvasW = Math.round(affectCanvasH * aspect);
+  console.log('CSS3D affect: meshWorldW', meshWorldW, 'meshWorldH', meshWorldH);
 
-  affectCanvas = document.createElement('canvas');
-  affectCanvas.width = affectCanvasW;
-  affectCanvas.height = affectCanvasH;
-  affectCtx = affectCanvas.getContext('2d');
+  const affectPanel = document.getElementById('affect-panel');
+  const panelPixelW = 300;
+  const panelPixelH = panelPixelW * (meshWorldH / meshWorldW);
 
-  affectTexture = new THREE.CanvasTexture(affectCanvas);
-  affectTexture.colorSpace = THREE.SRGBColorSpace;
-  affectTexture.flipY = false;
-  affectTexture.minFilter = THREE.LinearFilter;
-  affectTexture.magFilter = THREE.LinearFilter;
-  affectTexture.generateMipmaps = false;
+  affectPanel.style.width = panelPixelW + 'px';
+  affectPanel.style.height = panelPixelH + 'px';
+  affectPanel.style.position = 'absolute';
+  affectPanel.style.display = 'block';
+  affectPanel.style.top = 'auto';
+  affectPanel.style.left = 'auto';
+  affectPanel.style.bottom = 'auto';
+  affectPanel.style.right = 'auto';
+  affectPanel.style.pointerEvents = 'none';
+  affectPanel.style.overflow = 'hidden';
 
+  // Resize the affect-plot canvas to fill the panel properly
+  const plotCanvas = document.getElementById('affect-plot');
+  plotCanvas.width = panelPixelW - 20;  // minus padding
+  plotCanvas.height = plotCanvas.width;  // square plot
+  plotCanvas.style.width = '100%';
+  plotCanvas.style.padding = '10px';
+
+  const cssObj = new CSS3DObject(affectPanel);
+  cssObj.position.copy(worldCenter);
+
+  const sx = meshWorldW / panelPixelW;
+  const sy = meshWorldH / panelPixelH;
+  cssObj.scale.set(sx, sy, 1);
+
+  css3dScene.add(cssObj);
+
+  // Transparent window in WebGL layer
   mesh.material = new THREE.MeshBasicMaterial({
-    map: affectTexture,
-    color: 0xffffff,
+    color: 0x000000,
+    opacity: 0,
+    transparent: true,
+    blending: THREE.NoBlending,
   });
-
-  // Hide the HTML affect panel
-  document.getElementById('affect-panel').style.display = 'none';
+  mesh.renderOrder = 1;
 }
 
-function drawAffectCanvas(affect) {
-  if (!affectCtx) return;
-  const W = affectCanvasW;
-  const H = affectCanvasH;
-  const SCALE = W / 200;
-
-  const BORDER = Math.round(1 * SCALE);
-  const TITLE_PAD_X = Math.round(6 * SCALE);
-  const TITLE_PAD_Y = Math.round(3 * SCALE);
-  const TITLE_FONT = Math.round(10 * SCALE);
-  const TITLE_H = TITLE_FONT + TITLE_PAD_Y * 2;
-  const PLOT_PAD = Math.round(10 * SCALE);
-
-  // Background
-  affectCtx.fillStyle = '#0a0a0a';
-  affectCtx.fillRect(0, 0, W, H);
-
-  // Title bar
-  affectCtx.fillStyle = '#1a1a1a';
-  affectCtx.fillRect(BORDER, BORDER, W - BORDER * 2, TITLE_H);
-  affectCtx.strokeStyle = '#3a3a3a';
-  affectCtx.lineWidth = BORDER;
-  affectCtx.beginPath();
-  affectCtx.moveTo(BORDER, BORDER + TITLE_H);
-  affectCtx.lineTo(W - BORDER, BORDER + TITLE_H);
-  affectCtx.stroke();
-
-  // Title text
-  affectCtx.font = `${TITLE_FONT}px "Courier New", monospace`;
-  affectCtx.fillStyle = '#33ff33';
-  affectCtx.fillText('affect_monitor.exe', BORDER + TITLE_PAD_X, BORDER + TITLE_PAD_Y + TITLE_FONT * 0.85);
-
-  // Border
-  affectCtx.strokeStyle = '#3a3a3a';
-  affectCtx.lineWidth = BORDER;
-  affectCtx.strokeRect(BORDER / 2, BORDER / 2, W - BORDER, H - BORDER);
-
-  // Plot area
-  const plotTop = BORDER + TITLE_H + PLOT_PAD;
-  const plotLeft = PLOT_PAD;
-  const plotW = W - PLOT_PAD * 2;
-  const plotH = H - plotTop - PLOT_PAD;
-  const plotCX = plotLeft + plotW / 2;
-  const plotCY = plotTop + plotH / 2;
-
-  // Grid lines
-  affectCtx.strokeStyle = '#1a3a1a';
-  affectCtx.lineWidth = Math.round(0.5 * SCALE);
-  for (let i = 0; i <= 4; i++) {
-    const x = plotLeft + (i / 4) * plotW;
-    const y = plotTop + (i / 4) * plotH;
-    affectCtx.beginPath();
-    affectCtx.moveTo(x, plotTop);
-    affectCtx.lineTo(x, plotTop + plotH);
-    affectCtx.stroke();
-    affectCtx.beginPath();
-    affectCtx.moveTo(plotLeft, y);
-    affectCtx.lineTo(plotLeft + plotW, y);
-    affectCtx.stroke();
-  }
-
-  // Crosshair at origin
-  affectCtx.strokeStyle = '#33ff33';
-  affectCtx.lineWidth = Math.round(0.5 * SCALE);
-  affectCtx.globalAlpha = 0.3;
-  affectCtx.beginPath();
-  affectCtx.moveTo(plotCX, plotTop);
-  affectCtx.lineTo(plotCX, plotTop + plotH);
-  affectCtx.stroke();
-  affectCtx.beginPath();
-  affectCtx.moveTo(plotLeft, plotCY);
-  affectCtx.lineTo(plotLeft + plotW, plotCY);
-  affectCtx.stroke();
-  affectCtx.globalAlpha = 1;
-
-  // Trail
-  const trail = affect.trail;
-  if (trail.length > 1) {
-    const now = performance.now();
-    const trailDuration = 30000;
-    affectCtx.lineWidth = Math.round(1.5 * SCALE);
-    affectCtx.lineCap = 'round';
-
-    for (let i = 1; i < trail.length; i++) {
-      const prev = trail[i - 1];
-      const curr = trail[i];
-      const age = now - curr.t;
-      const alpha = Math.max(0, 1 - age / trailDuration);
-      if (alpha <= 0) continue;
-
-      const x0 = plotCX + prev.v * (plotW / 2);
-      const y0 = plotCY - prev.a * (plotH / 2);
-      const x1 = plotCX + curr.v * (plotW / 2);
-      const y1 = plotCY - curr.a * (plotH / 2);
-
-      affectCtx.strokeStyle = '#33ff33';
-      affectCtx.globalAlpha = alpha * 0.6;
-      affectCtx.beginPath();
-      affectCtx.moveTo(x0, y0);
-      affectCtx.lineTo(x1, y1);
-      affectCtx.stroke();
-    }
-    affectCtx.globalAlpha = 1;
-  }
-
-  // Current point
-  const { valence, arousal } = affect.snapshot();
-  const px = plotCX + valence * (plotW / 2);
-  const py = plotCY - arousal * (plotH / 2);
-
-  affectCtx.shadowColor = '#33ff33';
-  affectCtx.shadowBlur = Math.round(8 * SCALE);
-  affectCtx.fillStyle = '#33ff33';
-  affectCtx.beginPath();
-  affectCtx.arc(px, py, Math.round(3 * SCALE), 0, Math.PI * 2);
-  affectCtx.fill();
-  affectCtx.shadowBlur = 0;
-
-  // Axis labels
-  const labelFont = Math.round(8 * SCALE);
-  affectCtx.font = `${labelFont}px "Courier New", monospace`;
-  affectCtx.fillStyle = '#33ff33';
-  affectCtx.globalAlpha = 0.4;
-
-  // Arousal — vertical axis
-  affectCtx.save();
-  affectCtx.translate(plotLeft - Math.round(4 * SCALE), plotCY);
-  affectCtx.rotate(-Math.PI / 2);
-  affectCtx.textAlign = 'center';
-  affectCtx.fillText('arousal', 0, 0);
-  affectCtx.restore();
-
-  // Valence — horizontal axis
-  affectCtx.textAlign = 'center';
-  affectCtx.fillText('valence', plotCX, plotTop + plotH + labelFont + Math.round(2 * SCALE));
-
-  affectCtx.globalAlpha = 1;
-
-  if (affectTexture) affectTexture.needsUpdate = true;
-}
-
-function wrapText(ctx, text, maxWidth) {
-  const words = text.split(' ');
-  const lines = [];
-  let line = '';
-  for (const word of words) {
-    const test = line ? line + ' ' + word : word;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = test;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
-// Track completed thoughts for the canvas renderer
-let completedThoughts = [];
 
 // ── Ghost state ──────────────────────────────────────
 let ghost = null;
@@ -508,6 +267,7 @@ let ghostWasResting = null;
 let bodyMesh = null;
 // Ghost mind — cognitive architecture
 const mind = new GhostMind();
+const affectPlot = new AffectPlot('affect-plot');
 const thoughtsContent = document.getElementById('thoughts-content');
 
 let currentThoughtEl = null;
@@ -574,7 +334,6 @@ function revealNextChar() {
     if (!isUserScrolledUp) {
       thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
     }
-    drawChatCanvas();
     revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
   } else if (generationDone) {
     revealTimeout = null;
@@ -584,8 +343,6 @@ function revealNextChar() {
       revealHidden.remove();
       cursorEl.remove();
     }
-    completedThoughts.push(revealBuffer);
-    drawChatCanvas();
     currentThoughtEl = null;
     revealVisible = null;
     revealHidden = null;
@@ -665,12 +422,14 @@ Promise.all([
     if (child.name === 'emotionhud') emotionhudMesh = child;
   });
   if (innerchatMesh) {
-    try { initChatTexture(innerchatMesh); }
-    catch (e) { console.error('initChatTexture failed:', e); }
+    try {
+      if (!css3dRenderer) initCSS3D();
+      initThoughtsCSS3D(innerchatMesh);
+    } catch (e) { console.error('initThoughtsCSS3D failed:', e); }
   }
   if (emotionhudMesh) {
-    try { initAffectTexture(emotionhudMesh); }
-    catch (e) { console.error('initAffectTexture failed:', e); }
+    try { initAffectCSS3D(emotionhudMesh); }
+    catch (e) { console.error('initAffectCSS3D failed:', e); }
   }
 
   // Set up ghost — remove everything except the ghost body mesh
@@ -828,6 +587,7 @@ function fitCamera() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  if (css3dRenderer) css3dRenderer.setSize(window.innerWidth, window.innerHeight);
 }
 let resizeTimer;
 window.addEventListener('resize', () => {
@@ -844,7 +604,7 @@ function animate() {
 
   // Integrate affect dynamics continuously
   mind.update(delta);
-  drawAffectCanvas(mind.affect);
+  affectPlot.draw(mind.affect);
 
   // Arousal modulates typing speed: high arousal = faster reveal
   const arousalT = (mind.affect.arousal + 1) / 2; // 0..1
@@ -899,6 +659,13 @@ function animate() {
   scene.rotation.x = tiltCurrent.y;
 
   renderer.render(scene, camera);
+
+  // Render CSS3D layer on top (thoughts panel in 3D)
+  if (css3dRenderer && css3dScene) {
+    // CSS3D scene mirrors the main scene's rotation
+    css3dScene.rotation.copy(scene.rotation);
+    css3dRenderer.render(css3dScene, camera);
+  }
 }
 
 animate();
