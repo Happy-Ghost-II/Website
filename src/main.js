@@ -73,9 +73,110 @@ function loadModel(filename, addToScene = true) {
   });
 }
 
-// ── Panel anchoring ───────────────────────────────────
-let computerEdgeWorld = null; // right edge of computer in world space
+// ── Chat canvas texture ───────────────────────────────
+let innerchatMesh = null;
+let chatCanvas = null;
+let chatCtx   = null;
+let chatTexture = null;
+let completedThoughts = [];  // finished thought strings
 const thoughtsPanel = document.getElementById('thoughts-panel');
+
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function drawChatCanvas() {
+  if (!chatCtx) return;
+  const W = chatCanvas.width;
+  const H = chatCanvas.height;
+  const PADDING    = Math.round(W * 0.05);
+  const FONT_SIZE  = Math.round(H * 0.048);
+  const LINE_H     = FONT_SIZE * 1.65;
+  const MAX_WIDTH  = W - PADDING * 2;
+
+  // Background
+  chatCtx.fillStyle = '#080808';
+  chatCtx.fillRect(0, 0, W, H);
+
+  // Subtle scanlines
+  chatCtx.fillStyle = 'rgba(0,0,0,0.12)';
+  for (let y = 0; y < H; y += 4) chatCtx.fillRect(0, y, W, 2);
+
+  chatCtx.font      = `${FONT_SIZE}px "Courier New", monospace`;
+  chatCtx.fillStyle = '#33ff33';
+
+  // Build line list from all thoughts + current partial
+  const allLines = [];
+  for (const thought of completedThoughts) {
+    allLines.push(...wrapText(chatCtx, thought, MAX_WIDTH));
+    allLines.push('');
+  }
+  const partial = revealBuffer.slice(0, revealIndex);
+  if (partial) allLines.push(...wrapText(chatCtx, partial, MAX_WIDTH));
+
+  const maxVisible = Math.floor((H - PADDING * 2) / LINE_H);
+  const visible    = allLines.slice(-maxVisible);
+
+  visible.forEach((line, i) => {
+    chatCtx.fillText(line, PADDING, PADDING + FONT_SIZE + i * LINE_H);
+  });
+
+  // Blinking cursor after last character
+  if (Math.floor(Date.now() / 500) % 2 === 0) {
+    const lastLine  = visible[visible.length - 1] ?? '';
+    const cursorX   = PADDING + chatCtx.measureText(lastLine).width + 2;
+    const cursorY   = PADDING + FONT_SIZE + Math.max(0, visible.length - 1) * LINE_H;
+    chatCtx.fillText('_', cursorX, cursorY);
+  }
+
+  if (chatTexture) chatTexture.needsUpdate = true;
+}
+
+function initChatCanvas(mesh) {
+  // Compute aspect ratio from the two largest bbox dimensions (ignore thickness)
+  mesh.updateMatrixWorld(true);
+  const box  = new THREE.Box3().setFromObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  const dims = [size.x, size.y, size.z].sort((a, b) => b - a);
+  const aspect = dims[0] / dims[1];
+
+  const H = 1024;
+  const W = Math.round(H * aspect);
+
+  chatCanvas = document.createElement('canvas');
+  chatCanvas.width  = W;
+  chatCanvas.height = H;
+  chatCtx = chatCanvas.getContext('2d');
+
+  chatTexture = new THREE.CanvasTexture(chatCanvas);
+  chatTexture.colorSpace = THREE.SRGBColorSpace;
+  chatTexture.flipY = false;
+
+  mesh.material = new THREE.MeshBasicMaterial({
+    map: chatTexture,
+    color: 0xffffff,
+    side: THREE.DoubleSide,
+  });
+
+  thoughtsPanel.style.display = 'none';
+  drawChatCanvas();
+
+  // Keep cursor blinking even when no text is changing
+  setInterval(drawChatCanvas, 500);
+}
 
 // ── Ghost state ──────────────────────────────────────
 let ghost = null;
@@ -194,6 +295,7 @@ function revealNextChar() {
     if (!isUserScrolledUp) {
       thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
     }
+    drawChatCanvas();
     revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
   } else if (generationDone) {
     revealTimeout = null;
@@ -203,6 +305,8 @@ function revealNextChar() {
       revealHidden.remove();
       cursorEl.remove();
     }
+    completedThoughts.push(revealBuffer);
+    drawChatCanvas();
     currentThoughtEl = null;
     revealVisible = null;
     revealHidden = null;
@@ -273,16 +377,17 @@ Promise.all([
   model.position.sub(center);
   model.updateMatrixWorld(true);
 
-  // Store the right edge in world space (model is now centered at origin)
-  computerEdgeWorld = new THREE.Vector3(box.max.x - center.x, 0, 0);
 
-  // Find MonitorBounds
+  // Find MonitorBounds and innerchat mesh
   let boundsObj = null;
   model.traverse((child) => {
-    if (child.name === 'MonitorBounds') {
-      boundsObj = child;
-    }
+    if (child.name === 'MonitorBounds') boundsObj = child;
+    if (child.name === 'innerchat') innerchatMesh = child;
   });
+  if (innerchatMesh) {
+    try { initChatCanvas(innerchatMesh); }
+    catch (e) { console.error('initChatCanvas failed:', e); }
+  }
 
   // Set up ghost — remove everything except the ghost body mesh
   ghost = ghostGltf.scene;
@@ -416,6 +521,24 @@ Promise.all([
   });
 });
 
+// ── Mouse tilt ────────────────────────────────────────
+const MAX_TILT = 0.12; // radians (~7°)
+let mouseDown = false;
+const tiltTarget  = new THREE.Vector2(0, 0); // x=rotY, y=rotX
+const tiltCurrent = new THREE.Vector2(0, 0);
+
+canvas.addEventListener('mousedown', (e) => {
+  mouseDown = true;
+  const nx = (e.clientX / window.innerWidth  - 0.5) * 2;
+  const ny = (e.clientY / window.innerHeight - 0.5) * 2;
+  tiltTarget.set(nx * MAX_TILT, ny * MAX_TILT);
+});
+
+window.addEventListener('mouseup', () => {
+  mouseDown = false;
+  tiltTarget.set(0, 0);
+});
+
 // ── Resize ────────────────────────────────────────────
 function fitCamera() {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -486,12 +609,10 @@ function animate() {
     }
   }
 
-  // Anchor thoughts panel to right edge of computer model
-  if (computerEdgeWorld) {
-    const projected = computerEdgeWorld.clone().project(camera);
-    const screenX = (projected.x + 1) / 2 * window.innerWidth;
-    thoughtsPanel.style.left = (screenX - 173) + 'px';
-  }
+  // Smoothly lerp scene tilt toward target
+  tiltCurrent.lerp(tiltTarget, 1 - Math.exp(-8 * delta));
+  scene.rotation.y = tiltCurrent.x;
+  scene.rotation.x = tiltCurrent.y;
 
   renderer.render(scene, camera);
 }

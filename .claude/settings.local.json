@@ -5,7 +5,11 @@
       "Bash(npm install:*)",
       "Bash(npm --version)",
       "Read(//c/Program Files/nodejs//**)",
-      "Read(//c/Program Files \\(x86\\)/**)"
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(magick --version)",
+      "Bash(convert --version)",
+      "Bash(python -c \"from PIL import Image; print\\('pillow ok'\\)\")",
+      "Bash(python:*)"
     ]
   }
 }

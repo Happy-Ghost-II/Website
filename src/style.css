@@ -145,6 +145,13 @@ canvas#scene {
   letter-spacing: 0.5px;
 }
 
+#corner-gif {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  pointer-events: none;
+}
+
 #affect-plot {
   display: block;
   width: 100%;
