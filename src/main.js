@@ -1,72 +1,431 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-import { GhostMind } from './ghost/ghost-mind.js';
-import { GhostBody } from './ghost/ghost-body.js';
-import { AffectPlot } from './ghost/affect-plot.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ── Renderer ──────────────────────────────────────────
+// Transparent clear so the CSS sky gradient (on <body>) shows through behind
+// the tower. Keeps the sky crisp and resolution-independent.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({
   canvas,
-  antialias: false,
+  antialias: true,
   powerPreference: 'high-performance',
   alpha: true,
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 // ── Scene ─────────────────────────────────────────────
 const scene = new THREE.Scene();
-// No scene.background — renderer clears to transparent so CSS3D layer shows through
-renderer.setClearColor(0x000000, 0);
 
 // ── Camera ────────────────────────────────────────────
-const camera = new THREE.PerspectiveCamera(39.6, window.innerWidth / window.innerHeight, 0.1, 1000);
-let cameraDistance = 10; // will be set after model loads
+// Worm's-eye view: low to the ground, off to one side, tilted up the tower.
+const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 5000);
+
+// Framing knobs — tuned against the model bounds once it loads.
+const VIEW = {
+  fov: 50,
+  azimuthDeg: 145,  // camera orbit angle — sin>0 keeps front wires coming forward, cos<0 puts them on the left; back recedes right
+  distanceK: 1.0,  // camera distance from the tower axis, × tower height
+  camHeightK: 0.2, // camera height above the base, × tower height
+  targetK: 0.6,     // look-at height up the tower, × tower height
+};
+
+// Tower yaw about its vertical axis (degrees). Note: because the front/back
+// anchors are mirror-symmetric, yawing the tower alone doesn't change the
+// picture — which side the wires exit is set by the camera azimuth instead.
+const TOWER_YAW_DEG = 0;
+
+// Power-line knobs.
+const WIRE = {
+  spanK: 4.0,      // distance from the tower to the far anchors, × tower height
+  sagK: 0.04,      // catenary droop depth, × span length
+  radiusK: 0.0012, // wire tube radius, × tower height
+  segments: 48,    // samples along each span
+};
+
+// Interactive camera + Save/Reset UI. Turn on to reposition the camera by hand;
+// off freezes the view at the VIEW framing (or a saved camera) with no controls.
+const CAMERA_CONTROLS = false;
+
+// Day/night cycle.
+const ENABLE_DAY_NIGHT = true;
+const DAY_NIGHT = {
+  useSystemTime: true, // drive the time of day from the user's local clock
+  durationSec: 60,     // full day→night loop length, used only when useSystemTime is false
+  startT: 0.25,        // loop start (0.25 = noon, 0.5 = sunset, 0.75 = midnight, 0.0 = sunrise)
+  paused: false,
+  fixedT: null,        // set 0..1 to freeze at a time of day (debugging); null = normal
+};
+
+// ── Sky environment ───────────────────────────────────
+// A vertical sky gradient baked into an equirectangular map, run through PMREM
+// so metal surfaces on the tower reflect the sky instead of rendering black.
+function makeSkyEnvironment() {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 512;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, c.height);
+  g.addColorStop(0.0, '#2472c4'); // zenith
+  g.addColorStop(0.45, '#4a95dc');
+  g.addColorStop(0.8, '#a6cdec');
+  g.addColorStop(1.0, '#d8ebf6'); // horizon
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envRT = pmrem.fromEquirectangular(tex);
+  tex.dispose();
+  pmrem.dispose();
+  return envRT.texture;
+}
+scene.environment = makeSkyEnvironment();
 
 // ── Lighting ──────────────────────────────────────────
-// Ambient — neutral, well-lit, like a normal room
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
-scene.add(ambientLight);
+// Sky/ground hemisphere for soft ambient daylight (colors/intensity animated).
+const hemiLight = new THREE.HemisphereLight(0xbfe0ff, 0x8a94a0, 1.1);
+scene.add(hemiLight);
 
-// Monitor glow — subtle warmth from the screen
-const monitorGlow = new THREE.PointLight(0xddccbb, 1.2, 4, 1.5);
-scene.add(monitorGlow); // position set after model loads
+// Sun — the key light and shadow caster. Position/color/intensity are driven by
+// the day/night cycle; the shadow camera rides along and frames the tower.
+const sun = new THREE.DirectionalLight(0xfff6e8, 2.0);
+sun.position.set(-4, 6, 3);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.6; // thin lattice members need a nudge to avoid acne
+scene.add(sun);
+scene.add(sun.target);
 
-// Fill light from above-right — neutral, soft
-const edgeLight = new THREE.DirectionalLight(0xffffff, 0.3);
-edgeLight.position.set(2, 3, 1);
-scene.add(edgeLight);
+// The sun orbits this point (the tower's mid-height) so the shadow camera stays
+// centered on the structure. Both are finalized once the model's size is known.
+let sunDist = 190;
+let sunTargetY = 30;
 
-// Soft top-down shadow caster — keeps shadows grounded
-const shadowLight = new THREE.DirectionalLight(0x111118, 0.4);
-shadowLight.position.set(0, 4, 3);
-shadowLight.castShadow = true;
-shadowLight.shadow.mapSize.width = 2048;
-shadowLight.shadow.mapSize.height = 2048;
-shadowLight.shadow.camera.near = 0.1;
-shadowLight.shadow.camera.far = 50;
-shadowLight.shadow.bias = -0.002;
-shadowLight.shadow.normalBias = 0.05;
-scene.add(shadowLight);
+// Moon — a dim, cool fill that only shows at night.
+const moon = new THREE.DirectionalLight(0xaec4ff, 0.0);
+scene.add(moon);
+scene.add(moon.target);
+
+// ── Sky dome ──────────────────────────────────────────
+// A big inward-facing sphere with a vertical gradient (top → horizon). The two
+// colors are uniforms so the day/night cycle can repaint the sky each frame.
+const skyUniforms = {
+  topColor: { value: new THREE.Color('#2472c4') },
+  bottomColor: { value: new THREE.Color('#d8ebf6') },
+  offset: { value: 120.0 },
+  exponent: { value: 0.7 },
+};
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: skyUniforms,
+  side: THREE.BackSide,
+  depthWrite: false,
+  toneMapped: false,
+  vertexShader: /* glsl */`
+    varying vec3 vWorldPosition;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = wp.xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform vec3 topColor;
+    uniform vec3 bottomColor;
+    uniform float offset;
+    uniform float exponent;
+    varying vec3 vWorldPosition;
+    void main() {
+      float h = normalize(vWorldPosition + vec3(0.0, offset, 0.0)).y;
+      float f = pow(max(h, 0.0), exponent);
+      gl_FragColor = vec4(mix(bottomColor, topColor, f), 1.0);
+    }
+  `,
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), skyMat);
+sky.renderOrder = -2; // draw first, behind the stars
+scene.add(sky);
+
+// ── Night sky: real stars (HYG catalog) ───────────────
+// ~120k real stars loaded from public/data/stars.bin (packed as
+// [dirX,dirY,dirZ, mag, ci] Float32 per star, dirZ = north celestial pole).
+// They form one celestial sphere that turns slowly around a pole placed behind
+// the tower. Each star twinkles with its own phase.
+const starVertexShader = /* glsl */`
+  uniform float uTime;
+  uniform float uPixelRatio;
+  uniform float uSpeed;
+  uniform float uTwinkle;
+  attribute float aSize;
+  attribute float aPhase;
+  attribute vec3 aColor;
+  varying vec3 vColor;
+  varying float vTw;
+  void main() {
+    vColor = aColor;
+    // A whisper of brightness shimmer only; size is NOT modulated — size twinkle
+    // is what read as jarring.
+    vTw = 1.0 - uTwinkle * (0.5 + 0.5 * sin(uTime * uSpeed + aPhase));
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = aSize * uPixelRatio;
+  }
+`;
+const starFragmentShader = /* glsl */`
+  uniform float uOpacity;
+  varying vec3 vColor;
+  varying float vTw;
+  void main() {
+    float d = length(gl_PointCoord - 0.5) * 2.0; // 0 at center .. 1 at edge
+    float e = max(1.0 - d, 0.0);
+    float core = pow(e, 2.0);        // soft bright core (smooth footprint, no flicker)
+    float glow = pow(e, 0.9) * 0.30; // soft wide halo — the visible "light"
+    gl_FragColor = vec4(vColor, (core + glow) * uOpacity * vTw);
+  }
+`;
+
+// The visible sky is one celestial sphere at this radius (real stars are all
+// effectively at infinity). Size + brightness come from apparent magnitude;
+// hue from the B-V color index.
+const STAR_RADIUS = 2800;
+
+// B-V color index → RGB: hot blue (negative) → white → warm red (high).
+const CI_STOPS = [
+  [-0.40, 0.51, 0.63, 1.00], // hot blue
+  [ 0.00, 0.72, 0.82, 1.00], // blue-white
+  [ 0.40, 1.00, 0.99, 0.95], // white
+  [ 0.80, 1.00, 0.88, 0.68], // yellow
+  [ 1.20, 1.00, 0.77, 0.50], // orange
+  [ 1.60, 1.00, 0.64, 0.40], // deep orange
+  [ 2.00, 1.00, 0.55, 0.35], // red
+];
+function ciToColor(ci, out) {
+  const lo = CI_STOPS[0][0];
+  const hi = CI_STOPS[CI_STOPS.length - 1][0];
+  const c = Math.max(lo, Math.min(hi, ci));
+  let k = 0;
+  while (k < CI_STOPS.length - 2 && c > CI_STOPS[k + 1][0]) k++;
+  const a = CI_STOPS[k], b = CI_STOPS[k + 1];
+  const t = (c - a[0]) / (b[0] - a[0]);
+  out[0] = a[1] + (b[1] - a[1]) * t;
+  out[1] = a[2] + (b[2] - a[2]) * t;
+  out[2] = a[3] + (b[3] - a[3]) * t;
+  return out;
+}
+
+const starSky = new THREE.Group();
+scene.add(starSky);
+let starMaterial = null; // set once the catalog loads
+
+// Build the point cloud from the packed [dirX,dirY,dirZ, mag, ci] Float32 data.
+function buildStars(data) {
+  const n = Math.floor(data.length / 5);
+  const positions = new Float32Array(n * 3);
+  const colors = new Float32Array(n * 3);
+  const sizes = new Float32Array(n);
+  const phases = new Float32Array(n);
+  const rgb = [0, 0, 0];
+
+  // Real catalog stars: magnitude → size + brightness, B-V → hue.
+  for (let i = 0; i < n; i++) {
+    const o = i * 5;
+    positions[i * 3] = data[o] * STAR_RADIUS;
+    positions[i * 3 + 1] = data[o + 1] * STAR_RADIUS;
+    positions[i * 3 + 2] = data[o + 2] * STAR_RADIUS;
+    const mag = data[o + 3];
+    // Brightness on a near-true logarithmic magnitude scale (each mag ≈ 2.5×):
+    // a few bright stars dominate, the faint majority recede — that IS the depth.
+    // Size also grows with brightness; the small floor keeps faint stars from
+    // sub-pixel flicker while staying dim enough to read as background.
+    const size = Math.min(10.0, Math.max(1.1, 0.8 + (5.5 - mag) * 0.95));
+    const intensity = Math.min(3.0, Math.max(0.02, Math.pow(2.512, (4.5 - mag) * 0.6)));
+    ciToColor(data[o + 4], rgb);
+    colors[i * 3] = rgb[0] * intensity;
+    colors[i * 3 + 1] = rgb[1] * intensity;
+    colors[i * 3 + 2] = rgb[2] * intensity;
+    sizes[i] = size;
+    phases[i] = Math.random() * Math.PI * 2;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+  starMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uOpacity: { value: 0 },
+      uPixelRatio: { value: renderer.getPixelRatio() },
+      uSpeed: { value: 0.7 },
+      uTwinkle: { value: 0.035 },
+    },
+    vertexShader: starVertexShader,
+    fragmentShader: starFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const points = new THREE.Points(geo, starMaterial);
+  points.renderOrder = -1;
+  points.frustumCulled = false;
+  starSky.add(points);
+  console.log(`stars loaded: ${n}`);
+}
+
+fetch('/data/stars.bin')
+  .then((r) => r.arrayBuffer())
+  .then((buf) => buildStars(new Float32Array(buf)))
+  .catch((e) => console.error('failed to load star catalog:', e));
+
+// ── Moon ──────────────────────────────────────────────
+// A soft glowing disc that sits along the moonlight direction and fades in at night.
+function makeMoonSprite() {
+  const s = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0.0, 'rgba(255,255,250,1)');
+  g.addColorStop(0.35, 'rgba(245,247,255,0.95)');
+  g.addColorStop(0.5, 'rgba(210,225,255,0.35)');
+  g.addColorStop(1.0, 'rgba(180,200,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.renderOrder = -1;
+  return sprite;
+}
+const moonSprite = makeMoonSprite();
+moonSprite.scale.set(220, 220, 1);
+scene.add(moonSprite);
+
+// The whole star field turns slowly around a fixed pole, like the real night
+// sky, so stars sweep in arcs as the night progresses. The pole sits behind the
+// tower, up in the frame; its axis is computed from the camera once loaded.
+const STAR_POLE = {
+  screenY: 0.45, // NDC height of the pivot (positive = upper part of the frame)
+  speed: 0.01,   // radians per second — a slow drift over the night
+  phase: 4.1,    // initial roll about the pole — orients the denser galactic-plane region into frame
+};
+const starPoleAxis = new THREE.Vector3(0, 1, 0);
+const starAlignQuat = new THREE.Quaternion(); // aligns the celestial pole (+Z) to starPoleAxis
+let starAngle = STAR_POLE.phase;
+
+function updateStars(dt, elapsed) {
+  starAngle += dt * STAR_POLE.speed;
+  // Spin around the pole, then orient the sphere so its pole sits at starPoleAxis.
+  starSky.quaternion.setFromAxisAngle(starPoleAxis, starAngle).multiply(starAlignQuat);
+  if (starMaterial) starMaterial.uniforms.uTime.value = elapsed;
+}
+
+// ── Day/night cycle ───────────────────────────────────
+// Palette keyframes (all in sRGB; THREE.Color converts to linear internally).
+const PAL = {
+  skyTopDay: new THREE.Color('#2472c4'),
+  skyTopNight: new THREE.Color('#05060d'),
+  skyTopSunset: new THREE.Color('#2b3a63'),
+  skyHorizonDay: new THREE.Color('#d8ebf6'),
+  skyHorizonNight: new THREE.Color('#0b1526'),
+  skyHorizonSunset: new THREE.Color('#ff9a52'),
+  sunNoon: new THREE.Color('#fff6e8'),
+  sunHorizon: new THREE.Color('#ff7a2f'),
+  hemiSkyDay: new THREE.Color('#bfe0ff'),
+  hemiSkyNight: new THREE.Color('#0a1428'),
+  hemiGroundDay: new THREE.Color('#8a94a0'),
+  hemiGroundNight: new THREE.Color('#05070d'),
+};
+// Scratch colors reused each frame to avoid per-frame allocation.
+const _c1 = new THREE.Color();
+const _c2 = new THREE.Color();
+const _sunDir = new THREE.Vector3();
+
+function smoothstep(edge0, edge1, x) {
+  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// t in [0,1): 0=sunrise, 0.25=noon, 0.5=sunset, 0.75=midnight.
+function updateDayNight(t) {
+  const phase = t * Math.PI * 2;
+  const elev = Math.sin(phase); // sun height: +1 noon, -1 midnight
+
+  const dayFactor = smoothstep(-0.08, 0.22, elev);       // 0 night → 1 day
+  const nightFactor = 1 - smoothstep(-0.16, 0.02, elev); // 1 deep night → 0 day
+  const twilight = smoothstep(0.28, 0.0, Math.abs(elev)); // peaks at the horizon
+
+  // Sun: arc across the sky, warmer and dimmer near the horizon. It orbits the
+  // tower's mid-height so its shadow camera stays framed on the structure.
+  _sunDir.set(Math.cos(phase) * 0.6, Math.sin(phase), 0.35).normalize();
+  sun.target.position.set(0, sunTargetY, 0);
+  sun.position.set(
+    _sunDir.x * sunDist,
+    _sunDir.y * sunDist + sunTargetY,
+    _sunDir.z * sunDist
+  );
+  sun.color.copy(PAL.sunNoon).lerp(PAL.sunHorizon, twilight);
+  sun.intensity = 2.4 * Math.max(elev, 0.0);
+  sun.castShadow = elev > -0.05; // stop casting once the sun is below the horizon
+
+  // Moon: opposite the sun, faint and cool, only at night.
+  moon.target.position.set(0, sunTargetY, 0);
+  moon.position.set(
+    -_sunDir.x * sunDist,
+    -_sunDir.y * sunDist + sunTargetY,
+    -_sunDir.z * sunDist
+  );
+  moon.intensity = 0.85 * nightFactor;
+
+  // Moon disc in the sky along the moonlight direction; up only when above horizon.
+  moonSprite.position.set(-_sunDir.x, -_sunDir.y, -_sunDir.z).multiplyScalar(2200);
+  moonSprite.material.opacity = nightFactor * smoothstep(-0.05, 0.15, -_sunDir.y);
+
+  // Hemisphere ambient.
+  hemiLight.color.copy(PAL.hemiSkyDay).lerp(PAL.hemiSkyNight, nightFactor);
+  hemiLight.groundColor.copy(PAL.hemiGroundDay).lerp(PAL.hemiGroundNight, nightFactor);
+  hemiLight.intensity = 0.28 + 0.85 * dayFactor;
+
+  // Sky gradient: night→day base, tinted toward sunset near the horizon crossing.
+  _c1.copy(PAL.skyTopNight).lerp(PAL.skyTopDay, dayFactor).lerp(PAL.skyTopSunset, twilight * 0.7);
+  skyUniforms.topColor.value.copy(_c1);
+  _c2.copy(PAL.skyHorizonNight).lerp(PAL.skyHorizonDay, dayFactor).lerp(PAL.skyHorizonSunset, twilight);
+  skyUniforms.bottomColor.value.copy(_c2);
+
+  // Reflections + overall exposure track daylight; stars fade in at night.
+  scene.environmentIntensity = 0.05 + 0.95 * dayFactor;
+  renderer.toneMappingExposure = 0.85 + 0.25 * dayFactor;
+  if (starMaterial) starMaterial.uniforms.uOpacity.value = nightFactor;
+}
 
 // ── Model Loader ──────────────────────────────────────
 const loader = new GLTFLoader();
 
-function loadModel(filename, addToScene = true) {
+function loadModel(filename) {
   return new Promise((resolve, reject) => {
     loader.load(
       `/models/${filename}`,
-      (gltf) => {
-        if (addToScene) scene.add(gltf.scene);
-        resolve(gltf);
-      },
+      (gltf) => resolve(gltf),
       undefined,
       (error) => {
         console.error(`Failed to load ${filename}:`, error);
@@ -76,598 +435,300 @@ function loadModel(filename, addToScene = true) {
   });
 }
 
-// ── CSS3D renderer for thoughts panel ─────────────────
-let innerchatMesh = null;
-let emotionhudMesh = null;
-let css3dRenderer = null;
-let css3dScene = null;
+// ── Camera framing ────────────────────────────────────
+function frameTower(height) {
+  const az = THREE.MathUtils.degToRad(VIEW.azimuthDeg);
+  const dist = height * VIEW.distanceK;
+  const camY = height * VIEW.camHeightK;
+  const targetY = height * VIEW.targetK;
 
-
-const thoughtsPanel = document.getElementById('thoughts-panel');
-
-function initCSS3D() {
-  css3dScene = new THREE.Scene();
-  css3dRenderer = new CSS3DRenderer();
-  css3dRenderer.setSize(window.innerWidth, window.innerHeight);
-  css3dRenderer.domElement.style.position = 'absolute';
-  css3dRenderer.domElement.style.top = '0';
-  css3dRenderer.domElement.style.left = '0';
-  css3dRenderer.domElement.style.pointerEvents = 'none';
-  // Insert CSS3D layer BEHIND the WebGL canvas
-  css3dRenderer.domElement.style.background = '#000000';
-  document.body.insertBefore(css3dRenderer.domElement, document.getElementById('scene'));
+  camera.fov = VIEW.fov;
+  camera.position.set(Math.sin(az) * dist, camY, Math.cos(az) * dist);
+  camera.lookAt(0, targetY, 0);
+  camera.updateProjectionMatrix();
 }
 
-function initThoughtsCSS3D(mesh) {
-  mesh.updateMatrixWorld(true);
+// ── Interactive camera + saved position ───────────────
+// Drag to orbit, scroll to zoom, right-drag to pan. "Save" persists the current
+// camera to localStorage so it's restored on reload; "Reset" clears it and
+// returns to the computed framing above.
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.rotateSpeed = 0.6;
+controls.zoomSpeed = 0.9;
+controls.panSpeed = 0.6;
+controls.enabled = CAMERA_CONTROLS;
 
-  // Decompose the mesh's world transform
-  const worldPos = new THREE.Vector3();
-  const worldQuat = new THREE.Quaternion();
-  const worldScale = new THREE.Vector3();
-  mesh.matrixWorld.decompose(worldPos, worldQuat, worldScale);
+const CAM_KEY = 'hgii.camera';
+let towerHeight = 0; // set once the model loads; used by resetCamera()
 
-  // Get local geometry extents to compute the mesh face size in local space
-  const geo = mesh.geometry;
-  geo.computeBoundingBox();
-  const localBox = geo.boundingBox;
+function saveCamera() {
+  const data = {
+    position: camera.position.toArray().map((n) => +n.toFixed(4)),
+    target: controls.target.toArray().map((n) => +n.toFixed(4)),
+    fov: camera.fov,
+  };
+  try {
+    localStorage.setItem(CAM_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[camera] could not save to localStorage:', e);
+  }
+  console.log(
+    '[camera] saved — paste into frameTower() to bake in:\n' +
+    `  camera.position.set(${data.position.join(', ')});\n` +
+    `  controls.target.set(${data.target.join(', ')});\n` +
+    `  camera.fov = ${data.fov};`
+  );
+  flashStatus('Camera saved');
+}
 
-  // Blender Z-up → Three.js Y-up: local X is width, local Z is height in Blender
-  // But GLTFLoader converts, so in world space X=width, Y=height
-  // Use the world-space bounding box for accurate dimensions
-  const worldBox = new THREE.Box3().setFromObject(mesh);
-  const worldSize = worldBox.getSize(new THREE.Vector3());
-  const meshWorldW = worldSize.x;
-  const meshWorldH = worldSize.y;
+function loadSavedCamera() {
+  try {
+    const raw = localStorage.getItem(CAM_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
 
-  console.log('CSS3D: meshWorldW', meshWorldW, 'meshWorldH', meshWorldH);
-  console.log('CSS3D: worldCenter', worldBox.getCenter(new THREE.Vector3()));
-  console.log('CSS3D: worldQuat', worldQuat);
+function applyCamera(data) {
+  camera.position.fromArray(data.position);
+  controls.target.fromArray(data.target);
+  if (data.fov) camera.fov = data.fov;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
 
-  // CSS pixel dimensions for the panel
-  const panelPixelW = 300;
-  const panelPixelH = panelPixelW * (meshWorldH / meshWorldW);
+function resetCamera() {
+  try { localStorage.removeItem(CAM_KEY); } catch (e) { /* ignore */ }
+  if (towerHeight) {
+    frameTower(towerHeight);
+    controls.target.set(0, towerHeight * VIEW.targetK, 0);
+    controls.update();
+  }
+  flashStatus('View reset');
+}
 
-  thoughtsPanel.style.width = panelPixelW + 'px';
-  thoughtsPanel.style.height = panelPixelH + 'px';
-  thoughtsPanel.style.position = 'absolute';
-  thoughtsPanel.style.display = 'flex';
-  thoughtsPanel.style.top = 'auto';
-  thoughtsPanel.style.left = 'auto';
-  thoughtsPanel.style.bottom = 'auto';
-  thoughtsPanel.style.right = 'auto';
-  thoughtsPanel.style.pointerEvents = 'auto';
-  thoughtsPanel.style.overflow = 'hidden';
+// Small on-screen controls + transient status text.
+let statusTimer;
+function flashStatus(msg) {
+  const el = document.getElementById('cam-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { el.style.opacity = '0'; }, 1500);
+}
 
-  const cssObj = new CSS3DObject(thoughtsPanel);
+function initCameraUI() {
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'position:fixed;left:12px;bottom:12px;z-index:10;display:flex;gap:6px;' +
+    'align-items:center;font-family:monospace;font-size:12px;';
+  const mkBtn = (label) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText =
+      'padding:6px 10px;background:rgba(0,0,0,0.55);color:#fff;' +
+      'border:1px solid rgba(255,255,255,0.4);border-radius:4px;cursor:pointer;font:inherit;';
+    return b;
+  };
+  const saveBtn = mkBtn('Save camera (S)');
+  const resetBtn = mkBtn('Reset (R)');
+  const status = document.createElement('span');
+  status.id = 'cam-status';
+  status.style.cssText = 'color:#fff;text-shadow:0 1px 2px #000;opacity:0;transition:opacity .2s;';
+  saveBtn.addEventListener('click', saveCamera);
+  resetBtn.addEventListener('click', resetCamera);
+  panel.append(saveBtn, resetBtn, status);
+  document.body.appendChild(panel);
+}
 
-  // Position at the world-space center of the mesh
-  const worldCenter = worldBox.getCenter(new THREE.Vector3());
-  cssObj.position.copy(worldCenter);
-
-  // CSS3DObject defaults to facing +Z (toward camera) which is correct
-  // Don't apply the mesh quaternion — it includes the Blender Z-up→Y-up rotation
-
-  // Scale: CSS pixels → world units
-  const sx = meshWorldW / panelPixelW;
-  const sy = meshWorldH / panelPixelH;
-  cssObj.scale.set(sx, sy, 1);
-
-  css3dScene.add(cssObj);
-
-  // Make the mesh a transparent "window" — the CSS3D content shows through behind it
-  mesh.material = new THREE.MeshBasicMaterial({
-    color: 0x000000,
-    opacity: 0,
-    transparent: true,
-    blending: THREE.NoBlending,
+if (CAMERA_CONTROLS) {
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 's' || e.key === 'S') saveCamera();
+    if (e.key === 'r' || e.key === 'R') resetCamera();
   });
-  mesh.renderOrder = 1;
+  initCameraUI();
 }
 
-function initAffectCSS3D(mesh) {
-  mesh.updateMatrixWorld(true);
-  const worldBox = new THREE.Box3().setFromObject(mesh);
-  const worldSize = worldBox.getSize(new THREE.Vector3());
-  const worldCenter = worldBox.getCenter(new THREE.Vector3());
-  const meshWorldW = worldSize.x;
-  const meshWorldH = worldSize.y;
+// ── Power lines ───────────────────────────────────────
+// A gently drooping conductor between two points, sampled as a curve.
+function catenaryCurve(a, b, sag, segments) {
+  const pts = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = a.clone().lerp(b, t);
+    p.y -= sag * 4 * t * (1 - t); // parabolic sag: 0 at the ends, max at midspan
+    pts.push(p);
+  }
+  return new THREE.CatmullRomCurve3(pts);
+}
 
-  console.log('CSS3D affect: meshWorldW', meshWorldW, 'meshWorldH', meshWorldH);
-
-  const affectPanel = document.getElementById('affect-panel');
-  const panelPixelW = 300;
-  const panelPixelH = panelPixelW * (meshWorldH / meshWorldW);
-
-  affectPanel.style.width = panelPixelW + 'px';
-  affectPanel.style.height = panelPixelH + 'px';
-  affectPanel.style.position = 'absolute';
-  affectPanel.style.display = 'block';
-  affectPanel.style.top = 'auto';
-  affectPanel.style.left = 'auto';
-  affectPanel.style.bottom = 'auto';
-  affectPanel.style.right = 'auto';
-  affectPanel.style.pointerEvents = 'none';
-  affectPanel.style.overflow = 'hidden';
-
-  // Resize the affect-plot canvas to fill the panel properly
-  const plotCanvas = document.getElementById('affect-plot');
-  plotCanvas.width = panelPixelW - 20;  // minus padding
-  plotCanvas.height = plotCanvas.width;  // square plot
-  plotCanvas.style.width = '100%';
-  plotCanvas.style.padding = '10px';
-
-  const cssObj = new CSS3DObject(affectPanel);
-  cssObj.position.copy(worldCenter);
-
-  const sx = meshWorldW / panelPixelW;
-  const sy = meshWorldH / panelPixelH;
-  cssObj.scale.set(sx, sy, 1);
-
-  css3dScene.add(cssObj);
-
-  // Transparent window in WebGL layer
-  mesh.material = new THREE.MeshBasicMaterial({
-    color: 0x000000,
-    opacity: 0,
-    transparent: true,
-    blending: THREE.NoBlending,
+// For each `line[FB][TMB][IO]` anchor, copy it out along the corridor to a far
+// endpoint (front anchors run forward, back anchors run backward) and string a
+// drooping wire between the pair.
+function addPowerLines(tower, towerHeight) {
+  const LINE_RE = /^line([FB])([TMB])([IO])$/;
+  const anchors = [];
+  tower.traverse((c) => {
+    const m = c.name.match(LINE_RE);
+    if (m) {
+      const pos = new THREE.Vector3();
+      c.getWorldPosition(pos);
+      anchors.push({ name: c.name, side: m[1], pos });
+    }
   });
-  mesh.renderOrder = 1;
-}
+  if (!anchors.length) { console.warn('no power-line anchors found'); return; }
 
-
-// ── Ghost state ──────────────────────────────────────
-let ghost = null;
-let ghostBounds = null;
-let ghostBody = null;
-let mouthOpen = null;
-let mouthClosed = null;
-let isTalking = false;
-let talkTimer = 0;
-let talkPhase = 0;
-const TALK_INTERVAL = 0.15;
-
-// ── Emotion colors ───────────────────────────────────
-const EMOTION_COLORS = {
-  anger:    new THREE.Color('#FF3039'),
-  disgust:  new THREE.Color('#92FF77'),
-  fear:     new THREE.Color('#999997'),
-  joy:      new THREE.Color('#FFCAF8'),
-  neutral:  new THREE.Color('#FFFFFC'),
-  sadness:  new THREE.Color('#2928FF'),
-  surprise: new THREE.Color('#FFCC8B'),
-};
-
-const EMOTION_VA = {
-  anger:    { v: -0.67, a:  0.49 },
-  disgust:  { v: -0.65, a:  0.03 },
-  fear:     { v: -0.59, a:  0.49 },
-  joy:      { v:  0.80, a:  0.25 },
-  neutral:  { v:  0.00, a: -0.54 },
-  sadness:  { v: -0.85, a: -0.22 },
-  surprise: { v:  0.10, a:  0.62 },
-};
-
-function nearestEmotion(valence, arousal) {
-  let best = 'neutral';
-  let bestDist = Infinity;
-  for (const [name, coord] of Object.entries(EMOTION_VA)) {
-    const d = (coord.v - valence) ** 2 + (coord.a - arousal) ** 2;
-    if (d < bestDist) { bestDist = d; best = name; }
+  // Corridor axis = horizontal direction from the back anchors to the front ones.
+  const frontC = new THREE.Vector3();
+  const backC = new THREE.Vector3();
+  let nf = 0, nb = 0;
+  for (const a of anchors) {
+    if (a.side === 'F') { frontC.add(a.pos); nf++; }
+    else { backC.add(a.pos); nb++; }
   }
-  return best;
-}
+  frontC.divideScalar(nf || 1);
+  backC.divideScalar(nb || 1);
+  const dirFront = frontC.sub(backC).setY(0).normalize();
 
-// ── Ghost animation ───────────────────────────────────
-let mixer = null;
-let walkAction = null;
-let idleAction = null;
-let ghostWasResting = null;
-let bodyMesh = null;
-// Ghost mind — cognitive architecture
-const mind = new GhostMind();
-const affectPlot = new AffectPlot('affect-plot');
-const thoughtsContent = document.getElementById('thoughts-content');
+  const span = towerHeight * WIRE.spanK;
+  const sag = span * WIRE.sagK;
+  const radius = towerHeight * WIRE.radiusK;
 
-let currentThoughtEl = null;
-let isUserScrolledUp = false;
-const scrollBtn = document.getElementById('scroll-to-bottom');
+  const wireMat = new THREE.MeshStandardMaterial({ color: 0x15181b, roughness: 0.55, metalness: 0.85 });
+  const group = new THREE.Group();
+  group.name = 'powerlines';
 
-function isNearBottom() {
-  return thoughtsContent.scrollHeight - thoughtsContent.scrollTop - thoughtsContent.clientHeight < 30;
-}
-
-thoughtsContent.addEventListener('scroll', () => {
-  isUserScrolledUp = !isNearBottom();
-  scrollBtn.classList.toggle('visible', isUserScrolledUp);
-});
-
-scrollBtn.addEventListener('click', () => {
-  thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
-  isUserScrolledUp = false;
-  scrollBtn.classList.remove('visible');
-});
-
-// Typewriter reveal system
-let revealBuffer = '';
-let revealIndex = 0;
-let revealTimeout = null;
-let generationDone = false;
-
-// Base reveal speed — modulated by arousal
-let revealBaseMs = 55; // ms per character at neutral arousal
-
-// Cursor element
-const cursorEl = document.createElement('span');
-cursorEl.id = 'thoughts-cursor';
-thoughtsContent.appendChild(cursorEl);
-
-let revealVisible = null;
-let revealHidden = null;
-
-function ensureThoughtEl() {
-  if (!currentThoughtEl) {
-    currentThoughtEl = document.createElement('span');
-    currentThoughtEl.className = 'thought-entry';
-    revealVisible = document.createElement('span');
-    revealHidden = document.createElement('span');
-    revealHidden.className = 'thought-unrevealed';
-    currentThoughtEl.appendChild(revealVisible);
-    // Cursor goes between visible and hidden text
-    currentThoughtEl.appendChild(cursorEl);
-    currentThoughtEl.appendChild(revealHidden);
-    thoughtsContent.appendChild(currentThoughtEl);
+  for (const a of anchors) {
+    const dir = a.side === 'F' ? dirFront : dirFront.clone().negate();
+    const far = a.pos.clone().addScaledVector(dir, span);
+    const curve = catenaryCurve(a.pos, far, sag, WIRE.segments);
+    const geo = new THREE.TubeGeometry(curve, WIRE.segments, radius, 6, false);
+    group.add(new THREE.Mesh(geo, wireMat));
   }
+  scene.add(group);
+  console.log(`power lines: ${anchors.length} spans, span=${span.toFixed(1)}`);
 }
 
-function nextRevealDelay() {
-  const noise = 1.0 + (Math.random() - 0.5) * 0.6;
-  return revealBaseMs * noise;
-}
+// ── Load the tower ────────────────────────────────────
+loadModel('electricaltower.glb').then((gltf) => {
+  const tower = gltf.scene;
 
-function revealNextChar() {
-  if (revealIndex < revealBuffer.length) {
-    revealIndex++;
-    revealVisible.textContent = revealBuffer.slice(0, revealIndex);
-    revealHidden.textContent = revealBuffer.slice(revealIndex);
-    if (!isUserScrolledUp) {
-      thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
-    }
-    revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
-  } else if (generationDone) {
-    revealTimeout = null;
-    // Show full text, clean up hidden span, move cursor out
-    if (revealVisible && revealHidden) {
-      revealVisible.textContent = revealBuffer;
-      revealHidden.remove();
-      cursorEl.remove();
-    }
-    currentThoughtEl = null;
-    revealVisible = null;
-    revealHidden = null;
-    revealBuffer = '';
-    revealIndex = 0;
-    generationDone = false;
-    // Done thinking — ghost can move again
-    if (ghostBody) ghostBody.isThinking = false;
-    // Cursor on a new line, waiting
-    thoughtsContent.appendChild(document.createElement('br'));
-    thoughtsContent.appendChild(document.createElement('br'));
-    thoughtsContent.appendChild(cursorEl);
-    if (!isUserScrolledUp) {
-      thoughtsContent.scrollTop = thoughtsContent.scrollHeight;
-    }
-  } else {
-    revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
-  }
-}
-
-function startReveal() {
-  if (revealTimeout) return;
-  revealTimeout = setTimeout(revealNextChar, nextRevealDelay());
-}
-
-mind.thoughtGenerator.addListener({
-  onToken(text) {
-    ensureThoughtEl();
-    revealBuffer = text;
-    revealVisible.textContent = revealBuffer.slice(0, revealIndex);
-    revealHidden.textContent = revealBuffer.slice(revealIndex);
-    generationDone = false;
-    // Ghost pauses and looks at camera while thinking
-    if (ghostBody) ghostBody.isThinking = true;
-    isTalking = true;
-    startReveal();
-  },
-  onComplete() {
-    generationDone = true;
-    isTalking = false;
-  },
-});
-
-// ── Load Models ──────────────────────────────────────
-Promise.all([
-  loadModel('computer.glb'),
-  loadModel('webghost.glb', false),
-]).then(([computerGltf, ghostGltf]) => {
-  const model = computerGltf.scene;
-
-  // Enable shadows on all meshes (skip MonitorBounds)
-  model.traverse((child) => {
-    if (child.name === 'MonitorBounds') return;
+  tower.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
       child.receiveShadow = true;
-      if (child.material) {
-        child.material.side = THREE.DoubleSide;
-        // child.material.transparent = true;
-        // child.material.opacity = 0.3;
-      }
+      if (child.material) child.material.side = THREE.DoubleSide;
     }
   });
 
-  // Center the computer model
-  const box = new THREE.Box3().setFromObject(model);
+  // Yaw the tower before measuring, so the corridor runs the desired way.
+  tower.rotation.y = THREE.MathUtils.degToRad(TOWER_YAW_DEG);
+  tower.updateMatrixWorld(true);
+
+  // Recenter horizontally over the origin, base sitting at y = 0.
+  const box = new THREE.Box3().setFromObject(tower);
   const center = box.getCenter(new THREE.Vector3());
-  model.position.sub(center);
-  model.updateMatrixWorld(true);
+  const size = box.getSize(new THREE.Vector3());
+  tower.position.x -= center.x;
+  tower.position.z -= center.z;
+  tower.position.y -= box.min.y;
+  tower.updateMatrixWorld(true);
 
+  console.log('tower size (w,h,d):', size.x.toFixed(2), size.y.toFixed(2), size.z.toFixed(2));
 
-  // Find MonitorBounds and innerchat mesh
-  let boundsObj = null;
-  model.traverse((child) => {
-    if (child.name === 'MonitorBounds') boundsObj = child;
-    if (child.name === 'innerchat') innerchatMesh = child;
-    if (child.name === 'emotionhud') emotionhudMesh = child;
-  });
-  if (innerchatMesh) {
-    try {
-      if (!css3dRenderer) initCSS3D();
-      initThoughtsCSS3D(innerchatMesh);
-    } catch (e) { console.error('initThoughtsCSS3D failed:', e); }
-  }
-  if (emotionhudMesh) {
-    try { initAffectCSS3D(emotionhudMesh); }
-    catch (e) { console.error('initAffectCSS3D failed:', e); }
-  }
+  scene.add(tower);
+  towerHeight = size.y;
 
-  // Set up ghost — remove everything except the ghost body mesh
-  ghost = ghostGltf.scene;
-  const toRemove = [];
-  ghost.traverse((child) => {
-    if (child.isLight || child.isCamera || child.name === 'Cone') {
-      toRemove.push(child);
-    }
-  });
-  toRemove.forEach((obj) => obj.parent?.remove(obj));
+  // Aim the sun's orbit at the tower's mid-height and size its shadow camera to
+  // enclose the whole structure, so shadows stay crisp at every sun angle.
+  sunTargetY = size.y * 0.5;
+  sunDist = size.y * 3;
+  const R = size.y * 0.7;
+  const shadowCam = sun.shadow.camera;
+  shadowCam.left = -R;
+  shadowCam.right = R;
+  shadowCam.top = R;
+  shadowCam.bottom = -R;
+  shadowCam.near = Math.max(1, sunDist - size.y);
+  shadowCam.far = sunDist + size.y;
+  shadowCam.updateProjectionMatrix();
 
-  // Set up remaining ghost meshes, find mouth and body meshes
-  ghost.traverse((child) => {
-    if (child.name === 'mouthopen') mouthOpen = child;
-    if (child.name === 'mouthclosed') mouthClosed = child;
-    if (child.name === 'body') {
-      bodyMesh = child;
-      bodyMesh.material = bodyMesh.material.clone();
-      bodyMesh.material.color.copy(EMOTION_COLORS.neutral);
-    }
-    if (child.isMesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-    }
-  });
+  frameTower(size.y);
+  controls.target.set(0, size.y * VIEW.targetK, 0);
 
-  // Default rest face
-  if (mouthOpen) mouthOpen.visible = false;
-  if (mouthClosed) mouthClosed.visible = true;
+  // Always honor a saved camera if one exists; the CAMERA_CONTROLS flag only
+  // governs interaction/UI, not whether your saved view is restored.
+  const saved = loadSavedCamera();
+  if (saved) applyCamera(saved);
+  controls.update();
 
-  if (boundsObj) {
-    ghostBounds = new THREE.Box3().setFromObject(boundsObj);
-    // Hide the bounds object
-    boundsObj.traverse((child) => {
-      child.visible = false;
-      if (child.isMesh) {
-        child.castShadow = false;
-        child.receiveShadow = false;
-      }
-    });
+  // Star-rotation pole: horizontally centered on the tower, up in the frame.
+  camera.updateMatrixWorld(true);
+  const towerNdc = new THREE.Vector3(0, size.y * 0.75, 0).project(camera);
+  starPoleAxis
+    .set(towerNdc.x, STAR_POLE.screenY, 0.5)
+    .unproject(camera)
+    .sub(camera.position)
+    .normalize();
+  // Orient the celestial sphere so its north pole (+Z) sits at that screen pole.
+  starAlignQuat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), starPoleAxis);
 
-    // Scale ghost down to half size
-    ghost.scale.multiplyScalar(0.5);
-
-    // Measure how far the ghost's mesh extends below/above its origin
-    const ghostBox = new THREE.Box3().setFromObject(ghost);
-    const ghostSize = ghostBox.getSize(new THREE.Vector3());
-    const meshBottomBelowOrigin = ghost.position.y - ghostBox.min.y;
-    const meshTopAboveOrigin = ghostBox.max.y - ghost.position.y;
-
-    // Shrink X bounds so ghost doesn't poke out the sides
-    ghostBounds.min.x += ghostSize.x * 0.5;
-    ghostBounds.max.x -= ghostSize.x * 0.5;
-
-    // Create physics body
-    console.log('bounds Y:', ghostBounds.min.y, 'to', ghostBounds.max.y);
-    console.log('mesh offsets: bottom', meshBottomBelowOrigin, 'top', meshTopAboveOrigin);
-    ghostBody = new GhostBody(ghost, ghostBounds, meshBottomBelowOrigin, meshTopAboveOrigin);
-    console.log('ghostBody Y range:', ghostBody._minY, 'to', ghostBody._maxY, 'starting at', ghostBody._posY);
-    scene.add(ghost);
-
-    // Set up animation mixer
-    const clip = ghostGltf.animations[0];
-    if (clip) {
-      mixer = new THREE.AnimationMixer(ghost);
-      const walkClip = THREE.AnimationUtils.subclip(clip, 'walk', 0, 90, 60);
-      const idleClip = THREE.AnimationUtils.subclip(clip, 'idle', 90, 270, 60);
-      walkAction = mixer.clipAction(walkClip);
-      idleAction = mixer.clipAction(idleClip);
-      walkAction.loop = THREE.LoopRepeat;
-      idleAction.loop = THREE.LoopRepeat;
-      idleAction.play(); // start on idle
-    }
-  }
-
-  // Position monitor glow at the screen face (front of bounds, centered)
-  if (boundsObj) {
-    const bc = ghostBounds.getCenter(new THREE.Vector3());
-    monitorGlow.position.set(bc.x, bc.y, ghostBounds.max.z + 0.15);
-  }
-
-  // Fit shadow camera to model bounds
-  const fullSize = box.getSize(new THREE.Vector3());
-  const maxDim = Math.max(fullSize.x, fullSize.y, fullSize.z);
-  const shadowMargin = maxDim * 3;
-
-  const dist = shadowLight.position.length();
-  shadowLight.shadow.camera.left = -shadowMargin;
-  shadowLight.shadow.camera.right = shadowMargin;
-  shadowLight.shadow.camera.top = shadowMargin;
-  shadowLight.shadow.camera.bottom = -shadowMargin;
-  shadowLight.shadow.camera.near = Math.max(0.1, dist - shadowMargin);
-  shadowLight.shadow.camera.far = dist + shadowMargin;
-  shadowLight.shadow.camera.updateProjectionMatrix();
-
-  shadowLight.target.position.set(0, 0, 0);
-  scene.add(shadowLight.target);
-  edgeLight.target.position.set(0, 0, 0);
-  scene.add(edgeLight.target);
-
-  // Fit camera — compute distance so model fills viewport at FOV 39.6°
-  const padding = 0.85;
-  const halfFitSize = Math.max(fullSize.x, fullSize.y) * padding * 0.5;
-  const vFovRad = THREE.MathUtils.degToRad(39.6);
-  cameraDistance = halfFitSize / Math.tan(vFovRad / 2);
-
-  // Position camera: straight on
-  camera.position.set(0, 0, cameraDistance);
-  camera.lookAt(0, 0, 0);
-  fitCamera();
-
-  // Start the ghost's brain
-  const loadingEl = document.createElement('span');
-  loadingEl.className = 'thought-entry';
-  loadingEl.textContent = 'loading...';
-  thoughtsContent.insertBefore(loadingEl, cursorEl);
-  mind.init(({ phase, loaded, total }) => {
-    if (loaded != null && total) {
-      const pct = Math.round((loaded / total) * 100);
-      if (phase === 'brain') {
-        loadingEl.textContent = `loading brain... ${pct}%`;
-      } else if (phase === 'affect') {
-        loadingEl.textContent = `loading affect... ${pct}%`;
-      }
-    } else if (phase === 'affect') {
-      loadingEl.textContent = 'loading affect...';
-    }
-  }).then(() => {
-    loadingEl.remove();
-    mind.start();
-  });
-});
-
-// ── Mouse tilt ────────────────────────────────────────
-const MAX_TILT = 0.12; // radians (~7°)
-let mouseDown = false;
-const tiltTarget  = new THREE.Vector2(0, 0); // x=rotY, y=rotX
-const tiltCurrent = new THREE.Vector2(0, 0);
-
-canvas.addEventListener('mousedown', (e) => {
-  mouseDown = true;
-  const nx = (e.clientX / window.innerWidth  - 0.5) * 2;
-  const ny = (e.clientY / window.innerHeight - 0.5) * 2;
-  tiltTarget.set(nx * MAX_TILT, ny * MAX_TILT);
-});
-
-window.addEventListener('mouseup', () => {
-  mouseDown = false;
-  tiltTarget.set(0, 0);
+  addPowerLines(tower, size.y);
 });
 
 // ── Resize ────────────────────────────────────────────
-function fitCamera() {
+function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  if (css3dRenderer) css3dRenderer.setSize(window.innerWidth, window.innerHeight);
 }
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(fitCamera, 100);
+  resizeTimer = setTimeout(onResize, 100);
 });
 
 // ── Render Loop ───────────────────────────────────────
 const clock = new THREE.Clock();
+let dayT = DAY_NIGHT.startT;
+
+// Map the user's local clock to cycle time: sunrise ≈ 06:00 (t=0), noon (0.25),
+// sunset ≈ 18:00 (0.5), midnight (0.75).
+function systemTimeOfDay() {
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  return (((h - 6) / 24) % 1 + 1) % 1;
+}
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = Math.min(clock.getDelta(), 0.1); // cap at 100ms to prevent explosion after tab switch
+  const dt = Math.min(clock.getDelta(), 0.1); // cap after tab-switch stalls
 
-  // Integrate affect dynamics continuously
-  mind.update(delta);
-  affectPlot.draw(mind.affect);
-
-  // Arousal modulates typing speed: high arousal = faster reveal
-  const arousalT = (mind.affect.arousal + 1) / 2; // 0..1
-  revealBaseMs = 35 + (1 - arousalT) * 50; // 35ms (aroused) to 85ms (calm)
-
-  if (mixer) mixer.update(delta);
-
-  if (bodyMesh) {
-    const { valence, arousal } = mind.affect.snapshot();
-    const emotion = nearestEmotion(valence, arousal);
-    bodyMesh.material.color.lerp(EMOTION_COLORS[emotion], delta * 1.5);
-  }
-
-  if (ghostBody) {
-    ghostBody.syncParams(mind.behaviorParams);
-    ghostBody.update(delta);
-
-    // Crossfade between walk and idle when movement state changes
-    if (walkAction && idleAction) {
-      const resting = ghostBody._isResting;
-      if (resting !== ghostWasResting) {
-        ghostWasResting = resting;
-        if (resting) {
-          walkAction.fadeOut(0.3);
-          idleAction.reset().fadeIn(0.3).play();
-        } else {
-          idleAction.fadeOut(0.3);
-          walkAction.reset().fadeIn(0.3).play();
-        }
-      }
-    }
-  }
-
-  if (mouthOpen && mouthClosed) {
-    if (isTalking) {
-      talkTimer += delta;
-      if (talkTimer >= TALK_INTERVAL) {
-        talkTimer = 0;
-        talkPhase = 1 - talkPhase;
-        mouthOpen.visible = talkPhase === 0;
-        mouthClosed.visible = talkPhase === 1;
-      }
+  if (ENABLE_DAY_NIGHT) {
+    let t;
+    if (DAY_NIGHT.fixedT != null) {
+      t = DAY_NIGHT.fixedT;
+    } else if (DAY_NIGHT.useSystemTime) {
+      t = systemTimeOfDay();
+      dayT = t;
+    } else if (!DAY_NIGHT.paused) {
+      dayT = (dayT + dt / DAY_NIGHT.durationSec) % 1;
+      t = dayT;
     } else {
-      mouthOpen.visible = false;
-      mouthClosed.visible = true;
+      t = dayT;
     }
+    updateDayNight(t);
   }
 
-  // Smoothly lerp scene tilt toward target
-  tiltCurrent.lerp(tiltTarget, 1 - Math.exp(-8 * delta));
-  scene.rotation.y = tiltCurrent.x;
-  scene.rotation.x = tiltCurrent.y;
+  updateStars(dt, clock.elapsedTime);
 
+  if (CAMERA_CONTROLS) controls.update();
   renderer.render(scene, camera);
-
-  // Render CSS3D layer on top (thoughts panel in 3D)
-  if (css3dRenderer && css3dScene) {
-    // CSS3D scene mirrors the main scene's rotation
-    css3dScene.rotation.copy(scene.rotation);
-    css3dRenderer.render(css3dScene, camera);
-  }
 }
-
 animate();
 
 export { scene, camera, renderer, loadModel };

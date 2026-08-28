@@ -8,7 +8,20 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #000;
+}
+
+/* ── Sky ───────────────────────────────────────────────
+   Crisp CSS gradient behind the transparent WebGL canvas.
+   Deeper blue at the zenith, paler toward the horizon. */
+body {
+  background: linear-gradient(
+    to bottom,
+    #2472c4 0%,
+    #3f8ed8 38%,
+    #7bb4e6 68%,
+    #b7d9f1 88%,
+    #d8ebf6 100%
+  );
 }
 
 canvas#scene {
@@ -19,143 +32,4 @@ canvas#scene {
   top: 0;
   left: 0;
   z-index: 1;
-}
-
-/* ── Ghost thoughts panel ─────────────────────────── */
-#thoughts-panel {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  background: #0a0a0a;
-  border: 1px solid #3a3a3a;
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  color: #33ff33;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-#thoughts-title {
-  background: #1a1a1a;
-  border-bottom: 1px solid #3a3a3a;
-  padding: 3px 6px;
-  font-size: 10px;
-  color: #33ff33;
-  letter-spacing: 0.5px;
-}
-
-#thoughts-content {
-  padding: 6px 8px;
-  line-height: 1.5;
-  word-wrap: break-word;
-  overflow-y: auto;
-  flex: 1;
-  pointer-events: auto;
-}
-
-#thoughts-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-#thoughts-content::-webkit-scrollbar-track {
-  background: #0a0a0a;
-}
-
-#thoughts-content::-webkit-scrollbar-thumb {
-  background: #1a3a1a;
-  border: 1px solid #33ff33;
-}
-
-#thoughts-content::-webkit-scrollbar-thumb:hover {
-  background: #2a4a2a;
-}
-
-#thoughts-content {
-  scrollbar-color: #1a3a1a #0a0a0a;
-  scrollbar-width: thin;
-}
-
-.thought-entry {
-  display: inline;
-}
-
-.thought-unrevealed {
-  color: transparent;
-}
-
-#scroll-to-bottom {
-  position: absolute;
-  bottom: 28px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid #33ff33;
-  background: #0a0a0a;
-  color: #33ff33;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-}
-
-#scroll-to-bottom.visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-#scroll-to-bottom:hover {
-  background: #1a2a1a;
-}
-
-#thoughts-cursor::after {
-  content: '_';
-}
-
-#thoughts-cursor {
-  animation: cursor-blink 1s step-end infinite;
-}
-
-@keyframes cursor-blink {
-  50% { opacity: 0; }
-}
-
-/* ── Affect monitor panel ─────────────────────────── */
-#affect-panel {
-  position: absolute;
-  top: 8%;
-  left: 8%;
-  width: 200px;
-  background: #0a0a0a;
-  border: 1px solid #3a3a3a;
-  font-family: 'Courier New', monospace;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-#affect-title {
-  background: #1a1a1a;
-  border-bottom: 1px solid #3a3a3a;
-  padding: 3px 6px;
-  font-size: 10px;
-  color: #33ff33;
-  letter-spacing: 0.5px;
-}
-
-#corner-gif {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  pointer-events: none;
-}
-
-#affect-plot {
-  display: block;
-  width: 100%;
-  height: auto;
-  padding: 10px;
 }
