@@ -37,6 +37,15 @@ const VIEW = {
   targetK: 0.6,     // look-at height up the tower, × tower height
 };
 
+// Baked-in default camera — a view dialed in with the camera controls and saved.
+// Applied on every origin so the framing never depends on localStorage (which
+// doesn't carry from the dev server to the live domain).
+const DEFAULT_CAMERA = {
+  position: [47.7349, -9.4418, -26.5162],
+  target: [11.7491, 36.997, 8.7392],
+  fov: 50,
+};
+
 // Tower yaw about its vertical axis (degrees). Note: because the front/back
 // anchors are mirror-symmetric, yawing the tower alone doesn't change the
 // picture — which side the wires exit is set by the camera azimuth instead.
@@ -657,11 +666,10 @@ loadModel('electricaltower.glb').then((gltf) => {
   shadowCam.far = sunDist + size.y;
   shadowCam.updateProjectionMatrix();
 
-  frameTower(size.y);
-  controls.target.set(0, size.y * VIEW.targetK, 0);
+  frameTower(size.y); // VIEW-based fallback
+  applyCamera(DEFAULT_CAMERA); // the baked saved view — authoritative on every origin
 
-  // Always honor a saved camera if one exists; the CAMERA_CONTROLS flag only
-  // governs interaction/UI, not whether your saved view is restored.
+  // A camera saved locally via the controls still overrides the default.
   const saved = loadSavedCamera();
   if (saved) applyCamera(saved);
   controls.update();
