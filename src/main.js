@@ -688,6 +688,165 @@ loadModel('electricaltower.glb').then((gltf) => {
   addPowerLines(tower, size.y);
 });
 
+// ── Music player ──────────────────────────────────────
+// A centered canvas toggle: "stop" art by default; tap/click to start the track
+// and show the "play" art, tap/click again to stop and revert.
+//
+// The two source GIFs are the SAME animation (same frame count, same phase) and
+// differ only by a small play/stop indicator baked into the moving artwork. Two
+// live <img> GIFs can't be kept frame-synced by the browser — they drift, so
+// swapping between them jumps the artwork to a different point in the loop. To
+// avoid that we decode each GIF's bytes ONCE into an array of frame bitmaps (the
+// cached data) and render onto a single canvas from ONE shared frame index. The
+// toggle only changes which frameset we draw at that index, so the artwork stays
+// on the exact same frame and only the indicator changes — seamless, no drift.
+(function initMusicPlayer() {
+  const toggle = document.getElementById('music-toggle');
+  const audio = document.getElementById('music-audio');
+  const canvas = document.getElementById('music-canvas');
+  if (!toggle || !audio || !canvas) return;
+
+  const SOURCES = {
+    stop: '/images/musicplayerstop.gif',
+    play: '/images/musicplayerplay.gif',
+  };
+  const DEFAULT_FRAME_MS = 40; // ~25fps fallback if a GIF omits frame delays
+
+  const ctx = canvas.getContext('2d');
+  let playing = false;
+
+  // Decoded frame data, keyed by state: { frames: ImageBitmap[], delays: ms[] }.
+  const cache = { stop: null, play: null };
+  let frameIndex = 0;
+  let acc = 0;          // ms accumulated toward the current frame's delay
+  let lastTs = 0;       // performance.now() of the previous rAF tick
+  let rafId = 0;
+
+  // The visible frameset follows `playing`, but only once its data is cached;
+  // until then we keep drawing whatever is already decoded so the canvas is
+  // never blank.
+  function activeState() {
+    if (playing && cache.play) return 'play';
+    if (!playing && cache.stop) return 'stop';
+    return cache.stop ? 'stop' : (cache.play ? 'play' : null);
+  }
+
+  function draw() {
+    const state = activeState();
+    if (!state) return;
+    const { frames } = cache[state];
+    const idx = frameIndex % frames.length;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(frames[idx], 0, 0, canvas.width, canvas.height);
+  }
+
+  // One clock drives the shared frame index. Both framesets are the same length
+  // and cadence, so a single index/timeline keeps them perfectly in step.
+  function tick(ts) {
+    rafId = requestAnimationFrame(tick);
+    const state = activeState();
+    if (!state) { lastTs = ts; return; }
+    const { frames, delays } = cache[state];
+    if (!lastTs) lastTs = ts;
+    acc += Math.min(ts - lastTs, 250); // cap after tab-switch stalls
+    lastTs = ts;
+    let advanced = false;
+    // Advance as many frames as elapsed time calls for (usually 0 or 1).
+    let guard = frames.length;
+    while (acc >= (delays[frameIndex % frames.length] || DEFAULT_FRAME_MS) && guard-- > 0) {
+      acc -= (delays[frameIndex % frames.length] || DEFAULT_FRAME_MS);
+      frameIndex = (frameIndex + 1) % frames.length;
+      advanced = true;
+    }
+    if (advanced) draw();
+  }
+
+  function startLoop() {
+    if (rafId) return;
+    lastTs = 0;
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // Decode one GIF into frame bitmaps + per-frame delays using WebCodecs.
+  async function decodeGif(url) {
+    const buf = await (await fetch(url)).arrayBuffer();
+    const decoder = new ImageDecoder({ data: buf, type: 'image/gif' });
+    await decoder.tracks.ready;
+    const track = decoder.tracks.selectedTrack;
+    const count = track.frameCount;
+    const frames = [];
+    const delays = [];
+    for (let i = 0; i < count; i++) {
+      const { image } = await decoder.decode({ frameIndex: i });
+      // `image` is a VideoFrame; bake it into an ImageBitmap so we can close the
+      // frame and free decoder memory while keeping a cheap, drawable copy.
+      frames.push(await createImageBitmap(image));
+      delays.push(image.duration ? image.duration / 1000 : DEFAULT_FRAME_MS);
+      image.close();
+    }
+    decoder.close();
+    return { frames, delays };
+  }
+
+  function setPlaying(on) {
+    playing = on;
+    // No DOM/opacity swap: the render loop simply starts drawing the other
+    // frameset at the same shared index on the next tick.
+    toggle.setAttribute('aria-pressed', String(on));
+  }
+
+  function toggleMusic() {
+    if (playing) {
+      // Pause without resetting, so the next tap resumes from here.
+      audio.pause();
+      setPlaying(false);
+    } else {
+      // Play returns a promise in modern browsers; guard against it rejecting
+      // (e.g. if the file is missing) so the UI doesn't get stuck.
+      const p = audio.play();
+      if (p && p.catch) p.catch((e) => { console.warn('[music] play failed:', e); setPlaying(false); });
+      setPlaying(true);
+    }
+  }
+
+  toggle.addEventListener('click', toggleMusic);
+  toggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMusic(); }
+  });
+
+  // Keep the art in sync if the track ever ends on its own (it loops, but be safe).
+  audio.addEventListener('ended', () => setPlaying(false));
+
+  // ── Decode + start ──────────────────────────────────
+  // Fall back to plain <img> GIFs if WebCodecs' ImageDecoder isn't available
+  // (older Safari/Firefox); the player still works, just without the sync fix.
+  if (typeof ImageDecoder === 'undefined') {
+    console.warn('[music] ImageDecoder unavailable — falling back to <img> GIFs');
+    canvas.remove();
+    const stopImg = new Image();
+    stopImg.src = SOURCES.stop;
+    stopImg.alt = 'Music player';
+    stopImg.style.cssText = 'display:block;width:100%;height:auto';
+    toggle.prepend(stopImg);
+    const update = () => { stopImg.src = playing ? SOURCES.play : SOURCES.stop; };
+    toggle.addEventListener('click', update);
+    toggle.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') update();
+    });
+    audio.addEventListener('ended', update);
+    return;
+  }
+
+  // Decode the default (stop) frameset first so the canvas paints ASAP, then the
+  // play frameset in the background so the first toggle is instant.
+  decodeGif(SOURCES.stop)
+    .then((data) => { cache.stop = data; canvas.width = data.frames[0].width; canvas.height = data.frames[0].height; draw(); startLoop(); })
+    .catch((e) => console.warn('[music] stop decode failed:', e));
+  decodeGif(SOURCES.play)
+    .then((data) => { cache.play = data; })
+    .catch((e) => console.warn('[music] play decode failed:', e));
+})();
+
 // ── Resize ────────────────────────────────────────────
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;

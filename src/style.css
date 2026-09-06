@@ -33,3 +33,28 @@ canvas#scene {
   left: 0;
   z-index: 1;
 }
+
+/* ── Music player ──────────────────────────────────────
+   Centered toggle sitting above the scene. The play/stop GIFs are decoded to
+   frame data once (see initMusicPlayer in main.js) and painted onto a single
+   canvas from one shared frame index, so toggling only swaps which frameset is
+   drawn — the artwork never drifts or jumps between the two. */
+.music-toggle {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  width: 560px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+#music-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}

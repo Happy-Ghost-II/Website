@@ -8,6 +8,18 @@
 </head>
 <body>
   <canvas id="scene"></canvas>
+
+  <!-- Music player: a centered canvas toggle. The play/stop GIFs are decoded to
+       frame data once (initMusicPlayer in main.js) and rendered onto this canvas
+       from a single shared frame index, so tapping just swaps which frameset is
+       drawn (never restarting or drifting the animation) and starts/pauses the
+       track. -->
+  <div id="music-toggle" class="music-toggle"
+       role="button" tabindex="0" aria-pressed="false" aria-label="Music player">
+    <canvas id="music-canvas" width="500" height="500"></canvas>
+  </div>
+  <audio id="music-audio" src="/audio/Source%20I.wav" loop preload="auto"></audio>
+
   <script type="module" src="./main.js"></script>
 </body>
 </html>
