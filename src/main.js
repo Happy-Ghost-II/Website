@@ -704,7 +704,41 @@ loadModel('electricaltower.glb').then((gltf) => {
   const toggle = document.getElementById('music-toggle');
   const audio = document.getElementById('music-audio');
   const canvas = document.getElementById('music-canvas');
+  const minmaxBtn = document.getElementById('music-minmax');
+  const minmaxIcon = document.getElementById('music-minmax-icon');
   if (!toggle || !audio || !canvas) return;
+
+  // ── Minimize / maximize ──
+  // Minimized hides the art (visibility, not display, so layout/frame timing is
+  // undisturbed) and stops the container from intercepting clicks, so the scene
+  // behind it stays interactive. Only the corner icon remains live.
+  const MINMAX_ICONS = {
+    expanded: '/images/musicplayer_icon_minus.png', // shown while maximized — click to minimize
+    minimized: '/images/musicplayer_icon_maxus.png', // shown while minimized — click to maximize
+  };
+  let minimized = false;
+
+  function setMinimized(on) {
+    minimized = on;
+    toggle.classList.toggle('minimized', on);
+    if (minmaxBtn) minmaxBtn.setAttribute('aria-pressed', String(on));
+    if (minmaxBtn) minmaxBtn.setAttribute('aria-label', on ? 'Maximize music player' : 'Minimize music player');
+    if (minmaxIcon) minmaxIcon.src = on ? MINMAX_ICONS.minimized : MINMAX_ICONS.expanded;
+  }
+
+  if (minmaxBtn) {
+    minmaxBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setMinimized(!minimized);
+    });
+    minmaxBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        setMinimized(!minimized);
+      }
+    });
+  }
 
   const SOURCES = {
     stop: '/images/musicplayerstop.gif',
@@ -826,6 +860,7 @@ loadModel('electricaltower.glb').then((gltf) => {
     const stopImg = new Image();
     stopImg.src = SOURCES.stop;
     stopImg.alt = 'Music player';
+    stopImg.className = 'music-art';
     stopImg.style.cssText = 'display:block;width:100%;height:auto';
     toggle.prepend(stopImg);
     const update = () => { stopImg.src = playing ? SOURCES.play : SOURCES.stop; };

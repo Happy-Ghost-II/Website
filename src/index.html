@@ -16,7 +16,11 @@
        track. -->
   <div id="music-toggle" class="music-toggle"
        role="button" tabindex="0" aria-pressed="false" aria-label="Music player">
-    <canvas id="music-canvas" width="500" height="500"></canvas>
+    <canvas id="music-canvas" class="music-art" width="500" height="500"></canvas>
+    <button id="music-minmax" class="music-minmax" type="button"
+            aria-pressed="false" aria-label="Minimize music player">
+      <img id="music-minmax-icon" src="/images/musicplayer_icon_minus.png" alt="">
+    </button>
   </div>
   <audio id="music-audio" src="/audio/Source%20I.wav" loop preload="auto"></audio>
 

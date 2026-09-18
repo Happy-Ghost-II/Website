@@ -45,7 +45,7 @@ canvas#scene {
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 10;
-  width: 560px;
+  width: min(560px, 80vw, 80vh);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -57,4 +57,35 @@ canvas#scene {
   display: block;
   width: 100%;
   height: auto;
+}
+
+/* Minimized: the art disappears and the container stops intercepting clicks,
+   so the scene behind it stays interactive — only the corner icon still is. */
+.music-toggle.minimized .music-art {
+  visibility: hidden;
+}
+.music-toggle.minimized {
+  pointer-events: none;
+}
+
+/* Minimize/maximize icon — sits above the player art's top-left corner,
+   sized and placed to match the reference mockup (musicplayer_icon_location_example.png). */
+.music-minmax {
+  position: absolute;
+  top: -6%;
+  left: 9%;
+  width: 24%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.music-minmax img {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
