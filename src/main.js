@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { parseGIF, decompressFrames } from 'gifuct-js';
 
 // ── Loading screen ────────────────────────────────────
 // Opaque cover, up from the moment the page loads, removed only once the
@@ -1031,7 +1032,7 @@ function initMusicPlayer() {
   // overlay canvas — direction 1 (forward) starts at frame 0 for minimizing,
   // direction -1 (reverse) starts at the last frame for maximizing — then
   // calls `onDone`. Falls back to an instant no-op transition if the GIF
-  // hasn't finished decoding yet (or WebCodecs isn't available at all).
+  // hasn't finished decoding yet.
   function playBlackholeTransition(direction, onDone) {
     if (!blackholeCache || !blackholeCanvas || !blackholeCtx) { onDone(); return; }
     const { frames, delays } = blackholeCache;
@@ -1173,24 +1174,59 @@ function initMusicPlayer() {
     rafId = requestAnimationFrame(tick);
   }
 
-  // Decode one GIF into frame bitmaps + per-frame delays using WebCodecs.
+  // Decode one GIF into frame bitmaps + per-frame delays, using gifuct-js's
+  // pure-JS parser rather than WebCodecs' ImageDecoder — iOS Safari (and
+  // anything else on WebKit) doesn't implement ImageDecoder for GIF, which
+  // silently broke frame-accurate decoding (and the black-hole reverse
+  // playback, which has no non-canvas equivalent) on mobile.
+  //
+  // GIF frames are only ever the sub-rectangle that changed, so each one has
+  // to be composited onto a running canvas per its disposal method (leave as
+  // is / clear to background / restore to before this frame) to get a full
+  // frame bitmap — this mirrors what a native GIF renderer does internally.
   async function decodeGif(url) {
     const buf = await (await fetch(url)).arrayBuffer();
-    const decoder = new ImageDecoder({ data: buf, type: 'image/gif' });
-    await decoder.tracks.ready;
-    const track = decoder.tracks.selectedTrack;
-    const count = track.frameCount;
+    const gif = parseGIF(buf);
+    const rawFrames = decompressFrames(gif, true);
+    const width = gif.lsd.width;
+    const height = gif.lsd.height;
+
+    const composite = document.createElement('canvas');
+    composite.width = width;
+    composite.height = height;
+    const cctx = composite.getContext('2d', { willReadFrequently: true });
+    const patchCanvas = document.createElement('canvas');
+    const pctx = patchCanvas.getContext('2d');
+
     const frames = [];
     const delays = [];
-    for (let i = 0; i < count; i++) {
-      const { image } = await decoder.decode({ frameIndex: i });
-      // `image` is a VideoFrame; bake it into an ImageBitmap so we can close the
-      // frame and free decoder memory while keeping a cheap, drawable copy.
-      frames.push(await createImageBitmap(image));
-      delays.push(image.duration ? image.duration / 1000 : DEFAULT_FRAME_MS);
-      image.close();
+    let previousSnapshot = null; // canvas state just before a disposalType-3 frame drew, for it to restore to
+    let lastDisposal = 0;
+    let lastDims = null;
+
+    for (const f of rawFrames) {
+      if (lastDisposal === 2 && lastDims) {
+        cctx.clearRect(lastDims.left, lastDims.top, lastDims.width, lastDims.height);
+      } else if (lastDisposal === 3 && previousSnapshot) {
+        cctx.putImageData(previousSnapshot, 0, 0);
+      }
+
+      if (f.disposalType === 3) {
+        previousSnapshot = cctx.getImageData(0, 0, width, height);
+      }
+
+      patchCanvas.width = f.dims.width;
+      patchCanvas.height = f.dims.height;
+      pctx.putImageData(new ImageData(f.patch, f.dims.width, f.dims.height), 0, 0);
+      cctx.drawImage(patchCanvas, f.dims.left, f.dims.top);
+
+      frames.push(await createImageBitmap(composite));
+      delays.push(f.delay || DEFAULT_FRAME_MS);
+
+      lastDisposal = f.disposalType;
+      lastDims = f.dims;
     }
-    decoder.close();
+
     return { frames, delays };
   }
 
@@ -1224,29 +1260,6 @@ function initMusicPlayer() {
   audio.addEventListener('ended', () => setPlaying(false));
 
   // ── Decode + start ──────────────────────────────────
-  // Fall back to plain <img> GIFs if WebCodecs' ImageDecoder isn't available
-  // (older Safari/Firefox); the player still works, just without the sync fix.
-  if (typeof ImageDecoder === 'undefined') {
-    console.warn('[music] ImageDecoder unavailable — falling back to <img> GIFs');
-    canvas.remove();
-    const stopImg = new Image();
-    stopImg.src = SOURCES.stop;
-    stopImg.alt = 'Music player';
-    stopImg.className = 'music-art';
-    stopImg.style.cssText = 'display:block;width:100%;height:auto';
-    toggle.prepend(stopImg);
-    const update = () => { stopImg.src = playing ? SOURCES.play : SOURCES.stop; };
-    toggle.addEventListener('click', update);
-    toggle.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') update();
-    });
-    audio.addEventListener('ended', update);
-    return new Promise((resolve) => {
-      if (stopImg.complete) resolve();
-      else stopImg.addEventListener('load', () => resolve(), { once: true });
-    });
-  }
-
   // Decode the default (stop) frameset first so the canvas paints ASAP, then the
   // play frameset in the background so the first toggle is instant.
   const stopReady = decodeGif(SOURCES.stop)
