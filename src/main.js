@@ -117,13 +117,25 @@ const WIRE = {
 };
 
 // Center-top red light knobs (see addCenterTopLight). Overridden at runtime by
-// a saved debug tweak (localStorage), if one exists.
+// a saved debug tweak (localStorage), if one exists. Only used as the
+// fallback for a fresh light added via the debug panel's "+ Add light"
+// button — the actual on-load setup comes from DEFAULT_TOP_LIGHTS below.
 const TOP_LIGHT = {
   color: 0xff0000,
   intensity: 4,
   distanceK: 0.6, // point-light falloff distance, × tower height
   decay: 2,
 };
+
+// Baked-in light setup — dialed in with the debug sliders and saved. Applied
+// on every origin (like DEFAULT_CAMERA) so it doesn't depend on localStorage,
+// which doesn't carry between dev-server restarts/ports or into other
+// previews. Index 0 is the base center-top light; any further entries are
+// extras added via the debug panel's "+ Add light" button.
+const DEFAULT_TOP_LIGHTS = [
+  { color: 0xff0000, intensity: 20, distance: 101.457, decay: 1.3, position: [1.268, 55.801, 0.028] },
+  { color: 0xf2e8d9, intensity: 4.8, distance: 102.725, decay: 0.6, position: [15.853, 39.949, -5.707] },
+];
 
 // The center-top light only shows dusk-to-dawn, like a real obstruction
 // light — on by the clock, not a dimmer. Hours are in local 24h time; the
@@ -959,14 +971,15 @@ readyPromises.push(loadModel('electricaltower.glb').then((gltf) => {
   addPowerLines(tower, size.y);
   addCenterTopLight(tower, size.y);
 
-  // Restore any saved light tweaks: the first entry applies onto the base
-  // center-top light, any further entries were extras added via the debug
-  // panel's "+ Add light" button and get recreated the same way.
+  // DEFAULT_TOP_LIGHTS is authoritative on every origin; a locally saved
+  // debug tweak (this browser only, mid-tuning) overrides it if present. The
+  // first entry applies onto the base center-top light, any further entries
+  // are extras (added via the debug panel's "+ Add light" button) recreated
+  // the same way.
   const savedLights = loadSavedTopLights();
-  if (savedLights && savedLights.length && centerTopLight) {
-    applyTopLight(centerTopLight, savedLights[0]);
-    for (let i = 1; i < savedLights.length; i++) createExtraLight(savedLights[i]);
-  }
+  const lightsConfig = (savedLights && savedLights.length) ? savedLights : DEFAULT_TOP_LIGHTS;
+  if (centerTopLight && lightsConfig[0]) applyTopLight(centerTopLight, lightsConfig[0]);
+  for (let i = 1; i < lightsConfig.length; i++) createExtraLight(lightsConfig[i]);
 
   if (TOP_LIGHT_DEBUG) initTopLightUI();
 }).catch((e) => console.error('tower failed to load:', e)));
