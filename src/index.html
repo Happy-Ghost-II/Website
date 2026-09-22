@@ -7,6 +7,14 @@
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
+  <!-- Loading screen: covers everything until the tower, stars, and music
+       player art have all finished loading (see the top of main.js), so
+       nothing pops in. Removed once initMusicPlayer/loadModel/stars.bin all
+       resolve. -->
+  <div id="loading-screen">
+    <span id="loading-text">Happy Ghost II</span>
+  </div>
+
   <canvas id="scene"></canvas>
 
   <!-- Music player: a centered canvas toggle. The play/stop GIFs are decoded to
@@ -17,6 +25,7 @@
   <div id="music-toggle" class="music-toggle"
        role="button" tabindex="0" aria-pressed="false" aria-label="Music player">
     <canvas id="music-canvas" class="music-art" width="500" height="500"></canvas>
+    <canvas id="music-blackhole-canvas" width="500" height="500" aria-hidden="true"></canvas>
     <button id="music-minmax" class="music-minmax" type="button"
             aria-pressed="false" aria-label="Minimize music player">
       <img id="music-minmax-icon" src="/images/musicplayer_icon_minus.png" alt="">

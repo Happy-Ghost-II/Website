@@ -2,6 +2,63 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// ── Loading screen ────────────────────────────────────
+// Opaque cover, up from the moment the page loads, removed only once the
+// tower model, star catalog, and music-player art have all finished loading
+// (see readyPromises below) — so nothing ever pops in after the reveal, and
+// the music player is already decoded/responsive on the very first click.
+// The title jitters/stretches the whole time so the wait reads as intentional.
+const loadingScreenEl = document.getElementById('loading-screen');
+const loadingTextEl = document.getElementById('loading-text');
+let loadingAnimId = 0;
+
+if (loadingTextEl) {
+  // Split into one span per character so each can ride its own point on a
+  // traveling sine wave — phase-offset by position, so the wave visibly
+  // moves down the word like a worm/snake undulating rather than the whole
+  // title jittering as one rigid block.
+  const rawText = loadingTextEl.textContent;
+  loadingTextEl.textContent = '';
+  const loadingChars = [...rawText].map((ch) => {
+    const span = document.createElement('span');
+    span.textContent = ch === ' ' ? ' ' : ch;
+    span.style.display = 'inline-block';
+    span.style.willChange = 'transform';
+    loadingTextEl.appendChild(span);
+    return span;
+  });
+
+  const loadingStart = performance.now();
+  const jitterLoadingText = (now) => {
+    const t = (now - loadingStart) / 1000;
+    loadingChars.forEach((span, i) => {
+      const phase = t * 3.2 + i * 0.6; // per-letter offset = the wave travels along the word
+      const y = Math.sin(phase) * 22;                     // bob up/down, like a hump moving through
+      const rot = Math.sin(phase) * 16;                   // bend with the wave, like a snake's body
+      const sy = 1 + Math.sin(phase + Math.PI / 2) * 0.4;  // stretch/shrink 90° out of phase with the bob
+      const sx = 1 / sy;                                   // squash-and-stretch: keep apparent volume
+      span.style.transform =
+        `translateY(${y.toFixed(1)}px) rotate(${rot.toFixed(1)}deg) scale(${sx.toFixed(2)}, ${sy.toFixed(2)})`;
+    });
+    loadingAnimId = requestAnimationFrame(jitterLoadingText);
+  };
+  loadingAnimId = requestAnimationFrame(jitterLoadingText);
+}
+
+function hideLoadingScreen() {
+  if (!loadingScreenEl) return;
+  cancelAnimationFrame(loadingAnimId);
+  loadingScreenEl.classList.add('loading-screen--hidden');
+  loadingScreenEl.addEventListener('transitionend', () => loadingScreenEl.remove(), { once: true });
+}
+
+// Every subsystem below that loads something over the network pushes its
+// completion promise here; once they've all settled (or LOADING_TIMEOUT_MS
+// elapses, whichever first — a slow/broken asset shouldn't strand visitors
+// on a black screen forever) the loading screen is removed.
+const readyPromises = [];
+const LOADING_TIMEOUT_MS = 20000;
+
 // ── Renderer ──────────────────────────────────────────
 // Transparent clear so the CSS sky gradient (on <body>) shows through behind
 // the tower. Keeps the sky crisp and resolution-independent.
@@ -59,9 +116,29 @@ const WIRE = {
   segments: 48,    // samples along each span
 };
 
+// Center-top red light knobs (see addCenterTopLight). Overridden at runtime by
+// a saved debug tweak (localStorage), if one exists.
+const TOP_LIGHT = {
+  color: 0xff0000,
+  intensity: 4,
+  distanceK: 0.6, // point-light falloff distance, × tower height
+  decay: 2,
+};
+
+// The center-top light only shows dusk-to-dawn, like a real obstruction
+// light — on by the clock, not a dimmer. Hours are in local 24h time; the
+// off hour is earlier than the on hour because the "on" span wraps midnight.
+const TOP_LIGHT_ON_HOUR = 17;          // 17:00
+const TOP_LIGHT_OFF_HOUR = 6 + 46 / 60; // 06:46
+
 // Interactive camera + Save/Reset UI. Turn on to reposition the camera by hand;
 // off freezes the view at the VIEW framing (or a saved camera) with no controls.
 const CAMERA_CONTROLS = false;
+
+// Debug sliders for the center-top light (intensity/distance/decay/color) plus
+// a Save button that persists to localStorage and logs a paste-able snippet
+// for TOP_LIGHT. Turn off once the light is dialed in.
+const TOP_LIGHT_DEBUG = false;
 
 // Day/night cycle.
 const ENABLE_DAY_NIGHT = true;
@@ -72,6 +149,10 @@ const DAY_NIGHT = {
   paused: false,
   fixedT: null,        // set 0..1 to freeze at a time of day (debugging); null = normal
 };
+
+// A slider that scrubs DAY_NIGHT.fixedT, so lights (or anything else that
+// only shows up at night) can be checked without waiting for the real clock.
+const TIME_DEBUG = false;
 
 // ── Sky environment ───────────────────────────────────
 // A vertical sky gradient baked into an equirectangular map, run through PMREM
@@ -294,10 +375,12 @@ function buildStars(data) {
   console.log(`stars loaded: ${n}`);
 }
 
-fetch('/data/stars.bin')
-  .then((r) => r.arrayBuffer())
-  .then((buf) => buildStars(new Float32Array(buf)))
-  .catch((e) => console.error('failed to load star catalog:', e));
+readyPromises.push(
+  fetch('/data/stars.bin')
+    .then((r) => r.arrayBuffer())
+    .then((buf) => buildStars(new Float32Array(buf)))
+    .catch((e) => console.error('failed to load star catalog:', e))
+);
 
 // ── Moon ──────────────────────────────────────────────
 // A soft glowing disc that sits along the moonlight direction and fades in at night.
@@ -472,6 +555,64 @@ controls.enabled = CAMERA_CONTROLS;
 const CAM_KEY = 'hgii.camera';
 let towerHeight = 0; // set once the model loads; used by resetCamera()
 
+const LIGHT_KEY = 'hgii.topLights';
+let centerTopLight = null;  // the base light at the "centertoplight" vert
+const sceneLights = [];     // every tunable point light (base + any added via the debug UI)
+
+// Adds another red point light to the scene, tunable the same way as the base
+// one. With no `data` it starts at TOP_LIGHT's defaults, next to the first
+// light; `data` (from a saved snapshot) restores a specific position/settings.
+function createExtraLight(data) {
+  const light = new THREE.PointLight(
+    data && data.color != null ? data.color : TOP_LIGHT.color,
+    data && data.intensity != null ? data.intensity : TOP_LIGHT.intensity,
+    data && data.distance != null ? data.distance : towerHeight * TOP_LIGHT.distanceK,
+    data && data.decay != null ? data.decay : TOP_LIGHT.decay
+  );
+  const base = sceneLights[0];
+  light.position.fromArray(
+    data && data.position ? data.position : (base ? base.position.toArray() : [0, towerHeight, 0])
+  );
+  light.name = `topLight${sceneLights.length}`;
+  scene.add(light);
+  sceneLights.push(light);
+  return light;
+}
+
+function saveTopLights() {
+  if (!sceneLights.length) return;
+  const data = sceneLights.map((light) => ({
+    color: light.color.getHex(),
+    intensity: +light.intensity.toFixed(3),
+    distance: +light.distance.toFixed(3),
+    decay: +light.decay.toFixed(3),
+    position: light.position.toArray().map((n) => +n.toFixed(3)),
+  }));
+  try {
+    localStorage.setItem(LIGHT_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[top light] could not save to localStorage:', e);
+  }
+  console.log('[top light] saved — paste into TOP_LIGHTS to bake in:\n' + JSON.stringify(data, null, 2));
+}
+
+function loadSavedTopLights() {
+  try {
+    const raw = localStorage.getItem(LIGHT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function applyTopLight(light, data) {
+  light.color.setHex(data.color);
+  light.intensity = data.intensity;
+  light.distance = data.distance;
+  light.decay = data.decay;
+  if (data.position) light.position.fromArray(data.position);
+}
+
 function saveCamera() {
   const data = {
     position: camera.position.toArray().map((n) => +n.toFixed(4)),
@@ -562,6 +703,118 @@ if (CAMERA_CONTROLS) {
   initCameraUI();
 }
 
+// Debug sliders for every tunable point light (position + intensity/distance/
+// decay/color): one section per light, an "+ Add light" button that creates
+// another one and appends its section live, and a Save button that persists
+// all of them + logs a snippet to paste into TOP_LIGHTS.
+function initTopLightUI() {
+  if (!sceneLights.length) return;
+
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'position:fixed;right:12px;top:12px;z-index:10;display:flex;flex-direction:column;gap:10px;' +
+    'padding:10px 12px;background:rgba(0,0,0,0.55);color:#fff;border:1px solid rgba(255,255,255,0.4);' +
+    'border-radius:4px;font-family:monospace;font-size:12px;min-width:220px;max-height:80vh;overflow-y:auto;';
+
+  const title = document.createElement('div');
+  title.textContent = 'Lights';
+  title.style.cssText = 'font-weight:bold;';
+  panel.appendChild(title);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+  panel.appendChild(list);
+
+  function addSlider(container, label, min, max, step, value, onInput) {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;';
+    const name = document.createElement('span');
+    name.textContent = label;
+    const val = document.createElement('span');
+    val.textContent = value.toFixed(2);
+    head.append(name, val);
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.value = String(value);
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      val.textContent = v.toFixed(2);
+      onInput(v);
+    });
+    row.append(head, input);
+    container.appendChild(row);
+  }
+
+  function addLightSection(light, index) {
+    const section = document.createElement('div');
+    section.style.cssText =
+      'display:flex;flex-direction:column;gap:4px;padding-top:8px;' +
+      (index > 0 ? 'border-top:1px solid rgba(255,255,255,0.2);' : '');
+    const heading = document.createElement('div');
+    heading.textContent = index === 0 ? 'Center-top light' : `Light ${index + 1}`;
+    heading.style.cssText = 'font-weight:bold;opacity:0.85;';
+    section.appendChild(heading);
+
+    const posRange = Math.max(towerHeight * 2, 10);
+    const posStep = posRange / 200;
+    addSlider(section, 'X', -posRange, posRange, posStep, light.position.x, (v) => { light.position.x = v; });
+    addSlider(section, 'Y', -posRange, posRange, posStep, light.position.y, (v) => { light.position.y = v; });
+    addSlider(section, 'Z', -posRange, posRange, posStep, light.position.z, (v) => { light.position.z = v; });
+    addSlider(section, 'Intensity', 0, 20, 0.1, light.intensity, (v) => { light.intensity = v; });
+    addSlider(section, 'Distance', 0, towerHeight * 3, towerHeight * 0.01, light.distance, (v) => { light.distance = v; });
+    addSlider(section, 'Decay', 0, 4, 0.1, light.decay, (v) => { light.decay = v; });
+
+    const colorRow = document.createElement('label');
+    colorRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+    const colorName = document.createElement('span');
+    colorName.textContent = 'Color';
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.value = `#${light.color.getHexString()}`;
+    colorInput.addEventListener('input', () => { light.color.set(colorInput.value); });
+    colorRow.append(colorName, colorInput);
+    section.appendChild(colorRow);
+
+    list.appendChild(section);
+  }
+
+  sceneLights.forEach((light, i) => addLightSection(light, i));
+
+  const btnStyle =
+    'padding:6px 10px;background:rgba(255,255,255,0.15);color:#fff;' +
+    'border:1px solid rgba(255,255,255,0.4);border-radius:4px;cursor:pointer;font:inherit;';
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add light';
+  addBtn.style.cssText = btnStyle;
+  addBtn.addEventListener('click', () => {
+    const light = createExtraLight();
+    addLightSection(light, sceneLights.length - 1);
+  });
+
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Save lights';
+  saveBtn.style.cssText = btnStyle;
+  const status = document.createElement('span');
+  status.style.cssText = 'color:#fff;text-shadow:0 1px 2px #000;opacity:0;transition:opacity .2s;';
+  let saveStatusTimer;
+  saveBtn.addEventListener('click', () => {
+    saveTopLights();
+    status.textContent = 'Saved';
+    status.style.opacity = '1';
+    clearTimeout(saveStatusTimer);
+    saveStatusTimer = setTimeout(() => { status.style.opacity = '0'; }, 1500);
+  });
+
+  panel.append(addBtn, saveBtn, status);
+  document.body.appendChild(panel);
+}
+
 // ── Power lines ───────────────────────────────────────
 // A gently drooping conductor between two points, sampled as a curve.
 function catenaryCurve(a, b, sag, segments) {
@@ -622,8 +875,26 @@ function addPowerLines(tower, towerHeight) {
   console.log(`power lines: ${anchors.length} spans, span=${span.toFixed(1)}`);
 }
 
+// ── Center-top light ──────────────────────────────────
+// A red obstruction-style point light at the "centertoplight" vert exported
+// from the model — no visible fixture, just the glow it casts once it's dark.
+// Tunable live via the TOP_LIGHT_DEBUG sliders (see initTopLightUI).
+function addCenterTopLight(tower, towerHeight) {
+  const marker = tower.getObjectByName('centertoplight');
+  if (!marker) { console.warn('centertoplight vert not found'); return; }
+  const pos = new THREE.Vector3();
+  marker.getWorldPosition(pos);
+
+  const light = new THREE.PointLight(TOP_LIGHT.color, TOP_LIGHT.intensity, towerHeight * TOP_LIGHT.distanceK, TOP_LIGHT.decay);
+  light.position.copy(pos);
+  light.name = 'centerTopLight';
+  scene.add(light);
+  centerTopLight = light;
+  sceneLights.push(light);
+}
+
 // ── Load the tower ────────────────────────────────────
-loadModel('electricaltower.glb').then((gltf) => {
+readyPromises.push(loadModel('electricaltower.glb').then((gltf) => {
   const tower = gltf.scene;
 
   tower.traverse((child) => {
@@ -686,7 +957,19 @@ loadModel('electricaltower.glb').then((gltf) => {
   starAlignQuat.setFromUnitVectors(new THREE.Vector3(0, 0, 1), starPoleAxis);
 
   addPowerLines(tower, size.y);
-});
+  addCenterTopLight(tower, size.y);
+
+  // Restore any saved light tweaks: the first entry applies onto the base
+  // center-top light, any further entries were extras added via the debug
+  // panel's "+ Add light" button and get recreated the same way.
+  const savedLights = loadSavedTopLights();
+  if (savedLights && savedLights.length && centerTopLight) {
+    applyTopLight(centerTopLight, savedLights[0]);
+    for (let i = 1; i < savedLights.length; i++) createExtraLight(savedLights[i]);
+  }
+
+  if (TOP_LIGHT_DEBUG) initTopLightUI();
+}).catch((e) => console.error('tower failed to load:', e)));
 
 // ── Music player ──────────────────────────────────────
 // A centered canvas toggle: "stop" art by default; tap/click to start the track
@@ -700,13 +983,18 @@ loadModel('electricaltower.glb').then((gltf) => {
 // cached data) and render onto a single canvas from ONE shared frame index. The
 // toggle only changes which frameset we draw at that index, so the artwork stays
 // on the exact same frame and only the indicator changes — seamless, no drift.
-(function initMusicPlayer() {
+// Returns a promise that resolves once the play/stop/black-hole GIFs have all
+// finished decoding, so the caller can hold the loading screen up until the
+// music player's first click/minimize is instant rather than stalling on
+// GIF decode.
+function initMusicPlayer() {
   const toggle = document.getElementById('music-toggle');
   const audio = document.getElementById('music-audio');
   const canvas = document.getElementById('music-canvas');
   const minmaxBtn = document.getElementById('music-minmax');
   const minmaxIcon = document.getElementById('music-minmax-icon');
-  if (!toggle || !audio || !canvas) return;
+  const blackholeCanvas = document.getElementById('music-blackhole-canvas');
+  if (!toggle || !audio || !canvas) return Promise.resolve();
 
   // ── Minimize / maximize ──
   // Minimized hides the art (visibility, not display, so layout/frame timing is
@@ -726,16 +1014,79 @@ loadModel('electricaltower.glb').then((gltf) => {
     if (minmaxIcon) minmaxIcon.src = on ? MINMAX_ICONS.minimized : MINMAX_ICONS.expanded;
   }
 
+  // Plays the decoded black-hole frames once, in the given direction, onto the
+  // overlay canvas — direction 1 (forward) starts at frame 0 for minimizing,
+  // direction -1 (reverse) starts at the last frame for maximizing — then
+  // calls `onDone`. Falls back to an instant no-op transition if the GIF
+  // hasn't finished decoding yet (or WebCodecs isn't available at all).
+  function playBlackholeTransition(direction, onDone) {
+    if (!blackholeCache || !blackholeCanvas || !blackholeCtx) { onDone(); return; }
+    const { frames, delays } = blackholeCache;
+    let idx = direction === 1 ? 0 : frames.length - 1;
+    let last = 0;
+
+    function drawFrame() {
+      blackholeCtx.clearRect(0, 0, blackholeCanvas.width, blackholeCanvas.height);
+      blackholeCtx.drawImage(frames[idx], 0, 0, blackholeCanvas.width, blackholeCanvas.height);
+    }
+
+    function step(ts) {
+      if (!last) {
+        last = ts;
+        drawFrame();
+        requestAnimationFrame(step);
+        return;
+      }
+      const delay = delays[idx] || DEFAULT_FRAME_MS;
+      if (ts - last < delay) { requestAnimationFrame(step); return; }
+      last = ts;
+      idx += direction;
+      if (direction === 1 ? idx >= frames.length : idx < 0) {
+        blackholeCanvas.classList.remove('active');
+        onDone();
+        return;
+      }
+      drawFrame();
+      requestAnimationFrame(step);
+    }
+
+    blackholeCanvas.classList.add('active');
+    requestAnimationFrame(step);
+  }
+
+  // Routes every minimize/maximize request through the transition so the art
+  // only disappears after playing forward, and only reappears after playing
+  // back in reverse. Guarded against overlapping clicks mid-animation.
+  let transitioningMinmax = false;
+  function requestMinimizeToggle() {
+    if (transitioningMinmax) return;
+    transitioningMinmax = true;
+    if (minmaxBtn) minmaxBtn.disabled = true;
+    const goingToMinimize = !minimized;
+    if (goingToMinimize) {
+      // Hide the player art right away so only the black-hole animation shows
+      // while it plays — the GIF has transparent areas, so otherwise the art
+      // stays visible underneath it instead of looking "sucked in".
+      canvas.style.visibility = 'hidden';
+    }
+    playBlackholeTransition(goingToMinimize ? 1 : -1, () => {
+      setMinimized(goingToMinimize);
+      if (!goingToMinimize) canvas.style.visibility = '';
+      transitioningMinmax = false;
+      if (minmaxBtn) minmaxBtn.disabled = false;
+    });
+  }
+
   if (minmaxBtn) {
     minmaxBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setMinimized(!minimized);
+      requestMinimizeToggle();
     });
     minmaxBtn.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         e.stopPropagation();
-        setMinimized(!minimized);
+        requestMinimizeToggle();
       }
     });
   }
@@ -743,6 +1094,7 @@ loadModel('electricaltower.glb').then((gltf) => {
   const SOURCES = {
     stop: '/images/musicplayerstop.gif',
     play: '/images/musicplayerplay.gif',
+    blackhole: '/images/blackholemin.gif',
   };
   const DEFAULT_FRAME_MS = 40; // ~25fps fallback if a GIF omits frame delays
 
@@ -755,6 +1107,13 @@ loadModel('electricaltower.glb').then((gltf) => {
   let acc = 0;          // ms accumulated toward the current frame's delay
   let lastTs = 0;       // performance.now() of the previous rAF tick
   let rafId = 0;
+
+  // Black-hole minimize/maximize transition: decoded once, then a one-shot
+  // playthrough draws it onto its own overlay canvas — forwards (sucked in)
+  // when minimizing, backwards (emerging) when maximizing — on top of the
+  // player art, which only flips visibility once the animation completes.
+  let blackholeCache = null;
+  const blackholeCtx = blackholeCanvas ? blackholeCanvas.getContext('2d') : null;
 
   // The visible frameset follows `playing`, but only once its data is cached;
   // until then we keep drawing whatever is already decoded so the canvas is
@@ -869,18 +1228,33 @@ loadModel('electricaltower.glb').then((gltf) => {
       if (e.key === 'Enter' || e.key === ' ') update();
     });
     audio.addEventListener('ended', update);
-    return;
+    return new Promise((resolve) => {
+      if (stopImg.complete) resolve();
+      else stopImg.addEventListener('load', () => resolve(), { once: true });
+    });
   }
 
   // Decode the default (stop) frameset first so the canvas paints ASAP, then the
   // play frameset in the background so the first toggle is instant.
-  decodeGif(SOURCES.stop)
+  const stopReady = decodeGif(SOURCES.stop)
     .then((data) => { cache.stop = data; canvas.width = data.frames[0].width; canvas.height = data.frames[0].height; draw(); startLoop(); })
     .catch((e) => console.warn('[music] stop decode failed:', e));
-  decodeGif(SOURCES.play)
+  const playReady = decodeGif(SOURCES.play)
     .then((data) => { cache.play = data; })
     .catch((e) => console.warn('[music] play decode failed:', e));
-})();
+  const blackholeReady = blackholeCanvas
+    ? decodeGif(SOURCES.blackhole)
+        .then((data) => {
+          blackholeCache = data;
+          blackholeCanvas.width = data.frames[0].width;
+          blackholeCanvas.height = data.frames[0].height;
+        })
+        .catch((e) => console.warn('[music] blackhole decode failed:', e))
+    : Promise.resolve();
+
+  return Promise.all([stopReady, playReady, blackholeReady]);
+}
+readyPromises.push(initMusicPlayer());
 
 // ── Resize ────────────────────────────────────────────
 function onResize() {
@@ -906,6 +1280,68 @@ function systemTimeOfDay() {
   return (((h - 6) / 24) % 1 + 1) % 1;
 }
 
+// t (0..1, 0 = 06:00) → 24h clock hour (0..24), for anything keyed to time of day.
+function dayTToHour(t) {
+  return (((t * 24) + 6) % 24 + 24) % 24;
+}
+
+// t (0..1, 0 = 06:00) → an "HH:MM" clock label for the slider readout.
+function formatDayT(t) {
+  const h = dayTToHour(t);
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60) % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function initTimeUI() {
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'position:fixed;left:12px;top:12px;z-index:10;display:flex;flex-direction:column;gap:6px;' +
+    'padding:10px 12px;background:rgba(0,0,0,0.55);color:#fff;border:1px solid rgba(255,255,255,0.4);' +
+    'border-radius:4px;font-family:monospace;font-size:12px;min-width:200px;';
+
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;justify-content:space-between;';
+  const title = document.createElement('span');
+  title.textContent = 'Time of day';
+  title.style.cssText = 'font-weight:bold;';
+  const clockLabel = document.createElement('span');
+  head.append(title, clockLabel);
+  panel.appendChild(head);
+
+  const startT = DAY_NIGHT.fixedT != null ? DAY_NIGHT.fixedT : dayT;
+  clockLabel.textContent = formatDayT(startT);
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = '1';
+  slider.step = '0.001';
+  slider.value = String(startT);
+  slider.addEventListener('input', () => {
+    const t = parseFloat(slider.value);
+    DAY_NIGHT.fixedT = t;
+    clockLabel.textContent = formatDayT(t);
+  });
+  panel.appendChild(slider);
+
+  const liveBtn = document.createElement('button');
+  liveBtn.textContent = 'Live (system time)';
+  liveBtn.style.cssText =
+    'padding:6px 10px;background:rgba(255,255,255,0.15);color:#fff;' +
+    'border:1px solid rgba(255,255,255,0.4);border-radius:4px;cursor:pointer;font:inherit;';
+  liveBtn.addEventListener('click', () => {
+    DAY_NIGHT.fixedT = null;
+    const t = DAY_NIGHT.useSystemTime ? systemTimeOfDay() : dayT;
+    slider.value = String(t);
+    clockLabel.textContent = formatDayT(t);
+  });
+  panel.appendChild(liveBtn);
+
+  document.body.appendChild(panel);
+}
+if (TIME_DEBUG) initTimeUI();
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.1); // cap after tab-switch stalls
@@ -924,6 +1360,11 @@ function animate() {
       t = dayT;
     }
     updateDayNight(t);
+
+    if (centerTopLight) {
+      const hour = dayTToHour(t);
+      centerTopLight.visible = hour >= TOP_LIGHT_ON_HOUR || hour < TOP_LIGHT_OFF_HOUR;
+    }
   }
 
   updateStars(dt, clock.elapsedTime);
@@ -932,5 +1373,12 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
+
+// Reveal once everything's ready — or after LOADING_TIMEOUT_MS regardless, so
+// a slow or broken asset doesn't strand visitors on the loading screen.
+Promise.race([
+  Promise.all(readyPromises),
+  new Promise((resolve) => setTimeout(resolve, LOADING_TIMEOUT_MS)),
+]).then(hideLoadingScreen);
 
 export { scene, camera, renderer, loadModel };
